@@ -6,10 +6,15 @@ use super::task_graph::TaskGraph;
 use minihandle::IndexManager;
 use num_traits::{PrimInt, Unsigned};
 
+/// Graph vertex ID trait - primitive unsigned integer.
 pub trait VertexID: PrimInt + Unsigned + Hash {}
 
 impl<T: PrimInt + Unsigned + Hash> VertexID for T {}
 
+/// Represents a digraph.
+///
+/// `VID` must be a primitive unsigned integer type, used to ID vertices.
+/// `T` is arbitrary vertex payload.
 pub struct Graph<VID: VertexID, T> {
     vertex_ids: IndexManager<VID>,
 
@@ -24,24 +29,31 @@ pub struct Graph<VID: VertexID, T> {
 
 #[derive(Debug, PartialEq)]
 pub enum AccessVertexError {
-    InvalidVertex,
+    /// The vertex ID was invalid.
+    InvalidVertexID,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum AddEdgeStatus {
+    /// A new directed edge was added to the graph between the two vertices.
     Added,
+    /// A directed edge between the two vertices already exists.
     AlreadyExists,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum RemoveEdgeStatus {
+    /// A previously existing directed edge between the two vertices was removed.
     Removed,
+    /// A directed edge between the two vertices does not exist.
     DoesNotExist,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum EdgeAccessError {
+    /// The `from` vertex ID was invalid.
     InvalidFromVertex,
+    /// The `to` vertex ID was invalid.
     InvalidToVertex,
 }
 
@@ -57,6 +69,9 @@ impl<VID: VertexID, T> Graph<VID, T> {
         }
     }
 
+    /// Adds a vertex payload to the graph, returning its unique vertex ID.
+    ///
+    /// The vertex has no inbound / outbound edges initially.
     pub fn add_vertex(&mut self, vertex: T) -> VID {
         let vertex_id = self.vertex_ids.create();
 
@@ -69,6 +84,9 @@ impl<VID: VertexID, T> Graph<VID, T> {
         vertex_id
     }
 
+    /// If `vertex_id` is valid, removes the vertex payload from the graph and returns it.
+    ///
+    /// Removes the edges to / from the removed vertex.
     pub fn remove_vertex(&mut self, vertex_id: VID) -> Result<T, AccessVertexError> {
         if let Some(vertex) = self.vertices.remove(&vertex_id) {
             if let Some(in_edges) = self.in_edges.remove(&vertex_id) {
@@ -99,26 +117,37 @@ impl<VID: VertexID, T> Graph<VID, T> {
 
             Ok(vertex)
         } else {
-            Err(AccessVertexError::InvalidVertex)
+            Err(AccessVertexError::InvalidVertexID)
         }
     }
 
+    /// Returns the current number of vertices in the graph.
     pub fn num_vertices(&self) -> usize {
         self.vertices.len()
     }
 
-    pub fn vertex(&self, vertex_id: VID) -> Option<&T> {
-        self.vertices.get(&vertex_id)
+    /// If `vertex_id` is valid, returns the reference to the vertex payload.
+    pub fn vertex(&self, vertex_id: VID) -> Result<&T, AccessVertexError> {
+        self.vertices
+            .get(&vertex_id)
+            .ok_or(AccessVertexError::InvalidVertexID)
     }
 
-    pub fn vertex_mut(&mut self, vertex_id: VID) -> Option<&mut T> {
-        self.vertices.get_mut(&vertex_id)
+    /// If `vertex_id` is valid, returns the reference to the vertex payload.
+    pub fn vertex_mut(&mut self, vertex_id: VID) -> Result<&mut T, AccessVertexError> {
+        self.vertices
+            .get_mut(&vertex_id)
+            .ok_or(AccessVertexError::InvalidVertexID)
     }
 
+    /// Returns an iterator over all vertices in the graph, in no particular order.
     pub fn vertices(&self) -> VertexIterator<'_, VID, T> {
         VertexIterator::new(self.vertices.iter())
     }
 
+    /// If `from` and `to` are valid vertex ID's in the graph, adds a directed edge between them.
+    ///
+    /// Does nothing if the edge already exists.
     pub fn add_edge(&mut self, from: VID, to: VID) -> Result<AddEdgeStatus, EdgeAccessError> {
         if !self.vertices.contains_key(&from) {
             return Err(EdgeAccessError::InvalidFromVertex);
@@ -148,6 +177,9 @@ impl<VID: VertexID, T> Graph<VID, T> {
         }
     }
 
+    /// If `from` and `to` are valid vertex ID's in the graph, removes a directed edge between them.
+    ///
+    /// Does nothing if the edge does not exist.
     pub fn remove_edge(&mut self, from: VID, to: VID) -> Result<RemoveEdgeStatus, EdgeAccessError> {
         if !self.vertices.contains_key(&from) {
             return Err(EdgeAccessError::InvalidFromVertex);
@@ -193,31 +225,37 @@ impl<VID: VertexID, T> Graph<VID, T> {
         Ok(RemoveEdgeStatus::Removed)
     }
 
+    /// Returns the current number of edges in the graph.
     pub fn num_edges(&self) -> usize {
         let num_edges = self.in_edges.len();
         debug_assert_eq!(num_edges, self.out_edges.len(), "In / out edge mismatch.");
         num_edges
     }
 
+    /// Returns the current number of root vertices (with no inbound edges) in the graph.
     pub fn num_roots(&self) -> usize {
         self.roots.len()
     }
 
+    /// Returns an iterator over all root vertices (with no inbound edges) in the graph, in no particular order.
     pub fn roots(&self) -> VertexIDIterator<'_, VID> {
         VertexIDIterator::new(Some(self.roots.iter()))
     }
 
+    /// Returns the current number of leaf vertices (with no outbound edges) in the graph.
     pub fn num_leaves(&self) -> usize {
         self.leaves.len()
     }
 
+    /// Returns an iterator over all leaf vertices (with no outbound edges) in the graph, in no particular order.
     pub fn leaves(&self) -> VertexIDIterator<'_, VID> {
         VertexIDIterator::new(Some(self.leaves.iter()))
     }
 
+    /// If `vertex_id` is valid, returns the number of inbound esges to the vertex.
     pub fn num_in_neighbors(&self, vertex_id: VID) -> Result<usize, AccessVertexError> {
         if !self.vertices.contains_key(&vertex_id) {
-            Err(AccessVertexError::InvalidVertex)
+            Err(AccessVertexError::InvalidVertexID)
         } else {
             Ok(self
                 .in_edges
@@ -226,12 +264,13 @@ impl<VID: VertexID, T> Graph<VID, T> {
         }
     }
 
+    /// If `vertex_id` is valid, returns an iterator over all vertices whith inbound edges to the vertex, in no particular order.
     pub fn in_neighbors(
         &self,
         vertex_id: VID,
     ) -> Result<VertexIDIterator<'_, VID>, AccessVertexError> {
         if !self.vertices.contains_key(&vertex_id) {
-            Err(AccessVertexError::InvalidVertex)
+            Err(AccessVertexError::InvalidVertexID)
         } else {
             Ok(VertexIDIterator::new(
                 self.in_edges
@@ -241,9 +280,10 @@ impl<VID: VertexID, T> Graph<VID, T> {
         }
     }
 
+    /// If `vertex_id` is valid, returns the number of outbound esges from the vertex.
     pub fn num_out_neighbors(&self, vertex_id: VID) -> Result<usize, AccessVertexError> {
         if !self.vertices.contains_key(&vertex_id) {
-            Err(AccessVertexError::InvalidVertex)
+            Err(AccessVertexError::InvalidVertexID)
         } else {
             Ok(self
                 .out_edges
@@ -252,12 +292,13 @@ impl<VID: VertexID, T> Graph<VID, T> {
         }
     }
 
+    /// If `vertex_id` is valid, returns an iterator over all vertices whith outbound edges from the vertex, in no particular order.
     pub fn out_neighbors(
         &self,
         vertex_id: VID,
     ) -> Result<VertexIDIterator<'_, VID>, AccessVertexError> {
         if !self.vertices.contains_key(&vertex_id) {
-            Err(AccessVertexError::InvalidVertex)
+            Err(AccessVertexError::InvalidVertexID)
         } else {
             Ok(VertexIDIterator::new(
                 self.out_edges
@@ -269,11 +310,15 @@ impl<VID: VertexID, T> Graph<VID, T> {
 }
 
 impl<VID: VertexID, T: Clone> Graph<VID, T> {
+    /// Creates a [`TaskGraph`] representation of the graph.
+    ///
+    /// [`TaskGraph`]: struct.TaskGraph.html
     pub fn task_graph(&self) -> TaskGraph<VID, T> {
         TaskGraph::new(self, &self.vertices, &self.roots, &self.out_edges)
     }
 }
 
+/// Iterates over graph vertices, returning their vertex ID.
 pub struct VertexIDIterator<'a, VID: VertexID> {
     vertex_ids: Option<std::collections::hash_set::Iter<'a, VID>>,
 }
@@ -294,6 +339,7 @@ impl<'a, VID: VertexID> std::iter::Iterator for VertexIDIterator<'a, VID> {
     }
 }
 
+/// Iterates over graph vertices, returning their vertex ID and payload.
 pub struct VertexIterator<'a, VID: VertexID, T> {
     vertices: std::collections::hash_map::Iter<'a, VID, T>,
 }
