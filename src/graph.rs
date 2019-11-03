@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
+use super::task_graph::TaskGraph;
+
 use minihandle::IndexManager;
 use num_traits::{PrimInt, Unsigned};
 
@@ -67,11 +69,11 @@ impl<VID: VertexID, T> Graph<VID, T> {
         vertex_id
     }
 
-    pub fn remove_vertex(&mut self, vertex_id: &VID) -> Result<T, AccessVertexError> {
-        if let Some(vertex) = self.vertices.remove(vertex_id) {
-            if let Some(in_edges) = self.in_edges.remove(vertex_id) {
+    pub fn remove_vertex(&mut self, vertex_id: VID) -> Result<T, AccessVertexError> {
+        if let Some(vertex) = self.vertices.remove(&vertex_id) {
+            if let Some(in_edges) = self.in_edges.remove(&vertex_id) {
                 for in_neighbor in in_edges.iter() {
-                    if let Ok(RemoveEdgeStatus::Removed) = self.remove_edge(in_neighbor, vertex_id)
+                    if let Ok(RemoveEdgeStatus::Removed) = self.remove_edge(*in_neighbor, vertex_id)
                     {
                     } else {
                         panic!("Invalid edge state.");
@@ -79,9 +81,10 @@ impl<VID: VertexID, T> Graph<VID, T> {
                 }
             }
 
-            if let Some(out_edges) = self.out_edges.remove(vertex_id) {
+            if let Some(out_edges) = self.out_edges.remove(&vertex_id) {
                 for out_neighbor in out_edges.iter() {
-                    if let Ok(RemoveEdgeStatus::Removed) = self.remove_edge(vertex_id, out_neighbor)
+                    if let Ok(RemoveEdgeStatus::Removed) =
+                        self.remove_edge(vertex_id, *out_neighbor)
                     {
                     } else {
                         panic!("Invalid edge state.");
@@ -104,36 +107,40 @@ impl<VID: VertexID, T> Graph<VID, T> {
         self.vertices.len()
     }
 
-    pub fn vertex(&self, vertex_id: &VID) -> Option<&T> {
-        self.vertices.get(vertex_id)
+    pub fn vertex(&self, vertex_id: VID) -> Option<&T> {
+        self.vertices.get(&vertex_id)
     }
 
-    pub fn vertex_mut(&mut self, vertex_id: &VID) -> Option<&mut T> {
-        self.vertices.get_mut(vertex_id)
+    pub fn vertex_mut(&mut self, vertex_id: VID) -> Option<&mut T> {
+        self.vertices.get_mut(&vertex_id)
     }
 
-    pub fn add_edge(&mut self, from: &VID, to: &VID) -> Result<AddEdgeStatus, EdgeAccessError> {
-        if !self.vertices.contains_key(from) {
+    pub fn vertices(&self) -> VertexIterator<'_, VID, T> {
+        VertexIterator::new(self.vertices.iter())
+    }
+
+    pub fn add_edge(&mut self, from: VID, to: VID) -> Result<AddEdgeStatus, EdgeAccessError> {
+        if !self.vertices.contains_key(&from) {
             return Err(EdgeAccessError::InvalidFromVertex);
         }
 
-        if !self.vertices.contains_key(to) {
+        if !self.vertices.contains_key(&to) {
             return Err(EdgeAccessError::InvalidToVertex);
         }
 
-        self.roots.remove(to);
-        self.leaves.remove(from);
+        self.roots.remove(&to);
+        self.leaves.remove(&from);
 
         if self
             .in_edges
-            .entry(*to)
+            .entry(to)
             .or_insert(HashSet::new())
-            .insert(*from)
+            .insert(from)
             && self
                 .out_edges
-                .entry(*from)
+                .entry(from)
                 .or_insert(HashSet::new())
-                .insert(*to)
+                .insert(to)
         {
             Ok(AddEdgeStatus::Added)
         } else {
@@ -141,26 +148,22 @@ impl<VID: VertexID, T> Graph<VID, T> {
         }
     }
 
-    pub fn remove_edge(
-        &mut self,
-        from: &VID,
-        to: &VID,
-    ) -> Result<RemoveEdgeStatus, EdgeAccessError> {
-        if !self.vertices.contains_key(from) {
+    pub fn remove_edge(&mut self, from: VID, to: VID) -> Result<RemoveEdgeStatus, EdgeAccessError> {
+        if !self.vertices.contains_key(&from) {
             return Err(EdgeAccessError::InvalidFromVertex);
         }
 
-        if !self.vertices.contains_key(to) {
+        if !self.vertices.contains_key(&to) {
             return Err(EdgeAccessError::InvalidToVertex);
         }
 
-        if let Some(in_edges) = self.in_edges.get_mut(to) {
-            if !in_edges.remove(from) {
+        if let Some(in_edges) = self.in_edges.get_mut(&to) {
+            if !in_edges.remove(&from) {
                 return Ok(RemoveEdgeStatus::DoesNotExist);
             }
 
             if in_edges.is_empty() {
-                self.in_edges.remove(to);
+                self.in_edges.remove(&to);
             }
         } else {
             return Ok(RemoveEdgeStatus::DoesNotExist);
@@ -168,22 +171,22 @@ impl<VID: VertexID, T> Graph<VID, T> {
 
         let out_edges = self
             .out_edges
-            .get_mut(from)
+            .get_mut(&from)
             .expect("In / out edge mismatch.");
 
-        out_edges.take(to).expect("In / out edge mismatch.");
+        out_edges.take(&to).expect("In / out edge mismatch.");
 
         if out_edges.is_empty() {
-            self.out_edges.remove(from);
+            self.out_edges.remove(&from);
         }
 
         if self.num_in_neighbors(to).unwrap() == 0 {
-            let was_not_a_root = self.roots.insert(*to);
+            let was_not_a_root = self.roots.insert(to);
             assert!(was_not_a_root, "Root vertex had inbound edges.")
         }
 
         if self.num_out_neighbors(from).unwrap() == 0 {
-            let was_not_a_leaf = self.leaves.insert(*from);
+            let was_not_a_leaf = self.leaves.insert(from);
             assert!(was_not_a_leaf, "Leaf vertex had outbound edges.")
         }
 
@@ -200,88 +203,112 @@ impl<VID: VertexID, T> Graph<VID, T> {
         self.roots.len()
     }
 
-    pub fn roots(&self) -> VertexIterator<'_, VID> {
-        VertexIterator {
-            vertices: Some(self.roots.iter()),
-        }
+    pub fn roots(&self) -> VertexIDIterator<'_, VID> {
+        VertexIDIterator::new(Some(self.roots.iter()))
     }
 
     pub fn num_leaves(&self) -> usize {
         self.leaves.len()
     }
 
-    pub fn leaves(&self) -> VertexIterator<'_, VID> {
-        VertexIterator {
-            vertices: Some(self.leaves.iter()),
-        }
+    pub fn leaves(&self) -> VertexIDIterator<'_, VID> {
+        VertexIDIterator::new(Some(self.leaves.iter()))
     }
 
-    pub fn num_in_neighbors(&self, vertex_id: &VID) -> Result<usize, AccessVertexError> {
-        if !self.vertices.contains_key(vertex_id) {
+    pub fn num_in_neighbors(&self, vertex_id: VID) -> Result<usize, AccessVertexError> {
+        if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertex)
         } else {
             Ok(self
                 .in_edges
-                .get(vertex_id)
+                .get(&vertex_id)
                 .map_or(0, |in_edges| in_edges.len()))
         }
     }
 
     pub fn in_neighbors(
         &self,
-        vertex_id: &VID,
-    ) -> Result<VertexIterator<'_, VID>, AccessVertexError> {
-        if !self.vertices.contains_key(vertex_id) {
+        vertex_id: VID,
+    ) -> Result<VertexIDIterator<'_, VID>, AccessVertexError> {
+        if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertex)
         } else {
-            Ok(VertexIterator {
-                vertices: self
-                    .in_edges
-                    .get(vertex_id)
+            Ok(VertexIDIterator::new(
+                self.in_edges
+                    .get(&vertex_id)
                     .map_or(None, |in_edges| Some(in_edges.iter())),
-            })
+            ))
         }
     }
 
-    pub fn num_out_neighbors(&self, vertex_id: &VID) -> Result<usize, AccessVertexError> {
-        if !self.vertices.contains_key(vertex_id) {
+    pub fn num_out_neighbors(&self, vertex_id: VID) -> Result<usize, AccessVertexError> {
+        if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertex)
         } else {
             Ok(self
                 .out_edges
-                .get(vertex_id)
+                .get(&vertex_id)
                 .map_or(0, |out_edges| out_edges.len()))
         }
     }
 
     pub fn out_neighbors(
         &self,
-        vertex_id: &VID,
-    ) -> Result<VertexIterator<'_, VID>, AccessVertexError> {
-        if !self.vertices.contains_key(vertex_id) {
+        vertex_id: VID,
+    ) -> Result<VertexIDIterator<'_, VID>, AccessVertexError> {
+        if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertex)
         } else {
-            Ok(VertexIterator {
-                vertices: self
-                    .out_edges
-                    .get(vertex_id)
+            Ok(VertexIDIterator::new(
+                self.out_edges
+                    .get(&vertex_id)
                     .map_or(None, |out_edges| Some(out_edges.iter())),
-            })
+            ))
         }
     }
 }
 
-pub struct VertexIterator<'a, VID: VertexID> {
-    vertices: Option<std::collections::hash_set::Iter<'a, VID>>,
+impl<VID: VertexID, T: Clone> Graph<VID, T> {
+    pub fn task_graph(&self) -> TaskGraph<VID, T> {
+        TaskGraph::new(self, &self.vertices, &self.roots, &self.out_edges)
+    }
 }
 
-impl<'a, VID: VertexID> std::iter::Iterator for VertexIterator<'a, VID> {
+pub struct VertexIDIterator<'a, VID: VertexID> {
+    vertex_ids: Option<std::collections::hash_set::Iter<'a, VID>>,
+}
+
+impl<'a, VID: VertexID> VertexIDIterator<'a, VID> {
+    pub(super) fn new(vertex_ids: Option<std::collections::hash_set::Iter<'a, VID>>) -> Self {
+        Self { vertex_ids }
+    }
+}
+
+impl<'a, VID: VertexID> std::iter::Iterator for VertexIDIterator<'a, VID> {
     type Item = &'a VID;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.vertices
+        self.vertex_ids
             .as_mut()
-            .map_or(None, |vertices| vertices.next())
+            .map_or(None, |vertex_ids| vertex_ids.next())
+    }
+}
+
+pub struct VertexIterator<'a, VID: VertexID, T> {
+    vertices: std::collections::hash_map::Iter<'a, VID, T>,
+}
+
+impl<'a, VID: VertexID, T> VertexIterator<'a, VID, T> {
+    pub(super) fn new(vertices: std::collections::hash_map::Iter<'a, VID, T>) -> Self {
+        Self { vertices }
+    }
+}
+
+impl<'a, VID: VertexID, T> std::iter::Iterator for VertexIterator<'a, VID, T> {
+    type Item = (&'a VID, &'a T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.vertices.next()
     }
 }
 
@@ -302,7 +329,7 @@ mod test {
         // One vertex.
         let v0 = graph.add_vertex(-1);
 
-        assert_eq!(*graph.vertex(&v0).unwrap(), -1);
+        assert_eq!(*graph.vertex(v0).unwrap(), -1);
 
         assert_eq!(graph.num_vertices(), 1);
         assert_eq!(graph.num_edges(), 0);
@@ -310,9 +337,9 @@ mod test {
         assert_eq!(graph.num_leaves(), 1);
 
         // Change the vertex value.
-        *graph.vertex_mut(&v0).unwrap() = -2;
+        *graph.vertex_mut(v0).unwrap() = -2;
 
-        assert_eq!(*graph.vertex(&v0).unwrap(), -2);
+        assert_eq!(*graph.vertex(v0).unwrap(), -2);
 
         assert_eq!(graph.num_vertices(), 1);
         assert_eq!(graph.num_edges(), 0);
@@ -322,7 +349,7 @@ mod test {
         // Second vertex.
         let v1 = graph.add_vertex(-3);
 
-        assert_eq!(*graph.vertex(&v1).unwrap(), -3);
+        assert_eq!(*graph.vertex(v1).unwrap(), -3);
 
         assert_eq!(graph.num_vertices(), 2);
         assert_eq!(graph.num_edges(), 0);
@@ -330,7 +357,7 @@ mod test {
         assert_eq!(graph.num_leaves(), 2);
 
         // Add an edge v0 -> v1.
-        assert_eq!(graph.add_edge(&v0, &v1), Ok(AddEdgeStatus::Added));
+        assert_eq!(graph.add_edge(v0, v1), Ok(AddEdgeStatus::Added));
 
         assert_eq!(graph.num_vertices(), 2);
         assert_eq!(graph.num_edges(), 1);
@@ -343,7 +370,7 @@ mod test {
         }
 
         // v1 is its single out neighbor.
-        for neighbor in graph.out_neighbors(&v0).unwrap() {
+        for neighbor in graph.out_neighbors(v0).unwrap() {
             assert_eq!(*neighbor, v1);
         }
 
@@ -353,11 +380,11 @@ mod test {
         }
 
         // v0 is its single in neighbor.
-        for neighbor in graph.in_neighbors(&v1).unwrap() {
+        for neighbor in graph.in_neighbors(v1).unwrap() {
             assert_eq!(*neighbor, v0);
         }
 
-        assert_eq!(graph.add_edge(&v0, &v1), Ok(AddEdgeStatus::AlreadyExists));
+        assert_eq!(graph.add_edge(v0, v1), Ok(AddEdgeStatus::AlreadyExists));
 
         assert_eq!(graph.num_vertices(), 2);
         assert_eq!(graph.num_edges(), 1);
@@ -367,30 +394,30 @@ mod test {
             assert_eq!(*leaf, v1);
         }
 
-        for neighbor in graph.in_neighbors(&v1).unwrap() {
+        for neighbor in graph.in_neighbors(v1).unwrap() {
             assert_eq!(*neighbor, v0);
         }
 
         // Remove the edge.
-        assert_eq!(graph.remove_edge(&v0, &v1), Ok(RemoveEdgeStatus::Removed));
+        assert_eq!(graph.remove_edge(v0, v1), Ok(RemoveEdgeStatus::Removed));
 
         assert_eq!(graph.num_vertices(), 2);
         assert_eq!(graph.num_edges(), 0);
         assert_eq!(graph.num_roots(), 2);
         assert_eq!(graph.num_leaves(), 2);
 
-        assert_eq!(*graph.vertex(&v0).unwrap(), -2);
-        assert_eq!(*graph.vertex(&v1).unwrap(), -3);
+        assert_eq!(*graph.vertex(v0).unwrap(), -2);
+        assert_eq!(*graph.vertex(v1).unwrap(), -3);
 
         assert_eq!(
-            graph.remove_edge(&v0, &v1),
+            graph.remove_edge(v0, v1),
             Ok(RemoveEdgeStatus::DoesNotExist)
         );
 
         // Another vertex.
         let v2 = graph.add_vertex(7);
 
-        assert_eq!(*graph.vertex(&v2).unwrap(), 7);
+        assert_eq!(*graph.vertex(v2).unwrap(), 7);
 
         assert_eq!(graph.num_vertices(), 3);
         assert_eq!(graph.num_edges(), 0);
@@ -398,7 +425,7 @@ mod test {
         assert_eq!(graph.num_leaves(), 3);
 
         // v0 -> v1
-        assert_eq!(graph.add_edge(&v0, &v1), Ok(AddEdgeStatus::Added));
+        assert_eq!(graph.add_edge(v0, v1), Ok(AddEdgeStatus::Added));
 
         assert_eq!(graph.num_vertices(), 3);
         assert_eq!(graph.num_edges(), 1);
@@ -406,7 +433,7 @@ mod test {
         assert_eq!(graph.num_leaves(), 2);
 
         // v0 -> v1 -> v2
-        assert_eq!(graph.add_edge(&v1, &v2), Ok(AddEdgeStatus::Added));
+        assert_eq!(graph.add_edge(v1, v2), Ok(AddEdgeStatus::Added));
 
         assert_eq!(graph.num_vertices(), 3);
         assert_eq!(graph.num_edges(), 2);
@@ -416,15 +443,15 @@ mod test {
         // Root to leaf.
         for vertex in graph.roots() {
             assert_eq!(*vertex, v0);
-            assert_eq!(*graph.vertex(vertex).unwrap(), -2);
+            assert_eq!(*graph.vertex(*vertex).unwrap(), -2);
 
-            for vertex in graph.out_neighbors(vertex).unwrap() {
+            for vertex in graph.out_neighbors(*vertex).unwrap() {
                 assert_eq!(*vertex, v1);
-                assert_eq!(*graph.vertex(vertex).unwrap(), -3);
+                assert_eq!(*graph.vertex(*vertex).unwrap(), -3);
 
-                for vertex in graph.out_neighbors(vertex).unwrap() {
+                for vertex in graph.out_neighbors(*vertex).unwrap() {
                     assert_eq!(*vertex, v2);
-                    assert_eq!(*graph.vertex(vertex).unwrap(), 7);
+                    assert_eq!(*graph.vertex(*vertex).unwrap(), 7);
                 }
             }
         }
@@ -432,15 +459,15 @@ mod test {
         // Leaf to root.
         for vertex in graph.leaves() {
             assert_eq!(*vertex, v2);
-            assert_eq!(*graph.vertex(vertex).unwrap(), 7);
+            assert_eq!(*graph.vertex(*vertex).unwrap(), 7);
 
-            for vertex in graph.in_neighbors(vertex).unwrap() {
+            for vertex in graph.in_neighbors(*vertex).unwrap() {
                 assert_eq!(*vertex, v1);
-                assert_eq!(*graph.vertex(vertex).unwrap(), -3);
+                assert_eq!(*graph.vertex(*vertex).unwrap(), -3);
 
-                for vertex in graph.in_neighbors(vertex).unwrap() {
+                for vertex in graph.in_neighbors(*vertex).unwrap() {
                     assert_eq!(*vertex, v0);
-                    assert_eq!(*graph.vertex(vertex).unwrap(), -2);
+                    assert_eq!(*graph.vertex(*vertex).unwrap(), -2);
                 }
             }
         }
