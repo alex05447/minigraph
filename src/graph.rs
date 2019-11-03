@@ -89,8 +89,10 @@ impl<VID: VertexID, T> Graph<VID, T> {
                 }
             }
 
-            self.roots.remove(vertex_id);
-            self.leaves.remove(vertex_id);
+            self.roots.remove(&vertex_id);
+            self.leaves.remove(&vertex_id);
+
+            self.vertex_ids.destroy(vertex_id);
 
             Ok(vertex)
         } else {
