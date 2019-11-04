@@ -69,7 +69,7 @@ pub enum GetDependencyError {
 }
 
 impl<VID: VertexID, T> TaskGraph<VID, T> {
-    /// Reset the completed dependency counters on all nodes,
+    /// Reset the completed dependency counters on all vertices,
     /// allowing the graph to be executed again.
     pub fn reset(&self) {
         for (_, vertex) in self.vertices.iter() {
