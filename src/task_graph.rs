@@ -44,14 +44,28 @@ impl<T> TaskVertex<T> {
     }
 }
 
-/// Simplified unidirectional representation of the [`Graph`]
-/// used as the dependency graph for task scheduling / (parallel) execution.
+/// Simplified unidirectional representation of the (acyclic) [`Graph`]
+/// used as the dependency/execution graph for task scheduling / (parallel) execution.
+///
+/// Edges represent vertex dependencies, directions correspond to vertex execution order.
 ///
 /// [`Graph`]: struct.Graph.html
 pub struct TaskGraph<VID: VertexID, T> {
     vertices: HashMap<VID, TaskVertex<T>>,
     roots: Vec<VID>,
     out_edges: HashMap<VID, Vec<VID>>,
+}
+
+pub enum GetRootError {
+    /// The root vertex index was out of bounds.
+    RootIndexOutOfBounds,
+}
+
+pub enum GetDependencyError {
+    /// The vertex ID was invalid.
+    InvalidVertexID,
+    /// The dependency vertex index was out of bounds.
+    DependencyIndexOutOfBounds,
 }
 
 impl<VID: VertexID, T> TaskGraph<VID, T> {
@@ -63,9 +77,70 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
         }
     }
 
+    /// Returns the current number of root vertices (with no inbound edges) in the graph.
+    pub fn num_roots(&self) -> usize {
+        self.roots.len()
+    }
+
+    /// If `root_index` is in range `0 .. num_roots()`, returns the root [`TaskVertex`] at `root_index`.
+    ///
+    /// [`TaskVertex`]: struct.TaskVertex.html
+    pub fn get_root(&self, root_index: usize) -> Result<&TaskVertex<T>, GetRootError> {
+        let vertex_id = self.roots.get(root_index).ok_or(GetRootError::RootIndexOutOfBounds)?;
+        Ok(self.vertices.get(&vertex_id).expect("Invalid root vertex ID."))
+    }
+
+    /// If `root_index` is in range `0 .. num_roots()`, returns the root [`TaskVertex`] at `root_index`.
+    ///
+    /// Otherwise panics.
+    ///
+    /// [`TaskVertex`]: struct.TaskVertex.html
+    pub unsafe fn get_root_unchecked(&self, root_index: usize) -> (&VID, &TaskVertex<T>) {
+        let vertex_id = self.roots.get_unchecked(root_index);
+        (vertex_id, self.vertices.get(&vertex_id).expect("Invalid root vertex ID."))
+    }
+
     /// Returns an iterator over all task graph roots (vertices with no dependencies).
     pub fn roots(&self) -> TaskVertexIterator<'_, VID, T> {
         TaskVertexIterator::new(&self.vertices, Some(self.roots.iter()))
+    }
+
+    /// If `vertex_id` is valid, returns the number of vertices dependant on it.
+    pub fn num_dependencies(&self, vertex_id: VID) -> Result<usize, AccessVertexError> {
+        if !self.vertices.contains_key(&vertex_id) {
+            Err(AccessVertexError::InvalidVertexID)
+        } else {
+            Ok(self
+                .out_edges
+                .get(&vertex_id)
+                .map_or(0, |out_edges| out_edges.len()))
+        }
+    }
+
+    /// If `vertex_id` is valid and `dependency_index` is in range `0 .. num_dependencies(vertex_id)`,
+    /// returns the dependency [`TaskVertex`] at `dependency_index`.
+    ///
+    /// [`TaskVertex`]: struct.TaskVertex.html
+    pub fn get_dependency(&self, vertex_id: VID, dependency_index: usize) -> Result<(&VID, &TaskVertex<T>), GetDependencyError> {
+        if !self.vertices.contains_key(&vertex_id) {
+            Err(GetDependencyError::InvalidVertexID)
+        } else {
+            let dependencies = self.out_edges.get(&vertex_id).ok_or(GetDependencyError::DependencyIndexOutOfBounds)?;
+            let dependency_vertex_id = dependencies.get(dependency_index).ok_or(GetDependencyError::DependencyIndexOutOfBounds)?;
+            Ok((dependency_vertex_id, self.vertices.get(&dependency_vertex_id).expect("Invalid dependency vertex ID.")))
+        }
+    }
+
+    /// If `vertex_id` is valid and `dependency_index` is in range `0 .. num_dependencies(vertex_id)`,
+    /// returns the dependency [`TaskVertex`] at `dependency_index`.
+    ///
+    /// Otherwise panics.
+    ///
+    /// [`TaskVertex`]: struct.TaskVertex.html
+    pub unsafe fn get_dependency_unchecked(&self, vertex_id: VID, dependency_index: usize) -> (&VID, &TaskVertex<T>) {
+        let dependencies = self.out_edges.get(&vertex_id).expect("Invalid vertex ID.");
+        let dependency_vertex_id = dependencies.get_unchecked(dependency_index);
+        (dependency_vertex_id, self.vertices.get(&dependency_vertex_id).expect("Invalid dependency vertex ID."))
     }
 
     /// If `vertex_id` is valid, returns an iterator over all vertices dependant on it.
