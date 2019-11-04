@@ -177,6 +177,25 @@ impl<VID: VertexID, T> Graph<VID, T> {
         }
     }
 
+    /// If `from` and `to` are valid vertex ID's in the graph, returns `true` if a directed edge exists in the graph
+    /// between vertices `from` and `to`.
+    pub fn has_edge(&self, from: VID, to: VID) -> Result<bool, EdgeAccessError> {
+        if !self.vertices.contains_key(&from) {
+            return Err(EdgeAccessError::InvalidFromVertex);
+        }
+
+        if !self.vertices.contains_key(&to) {
+            return Err(EdgeAccessError::InvalidToVertex);
+        }
+
+        if let Some(out_edges) = self.out_edges.get(&from) {
+            Ok(out_edges.contains(&to))
+
+        } else {
+            Ok(false)
+        }
+    }
+
     /// If `from` and `to` are valid vertex ID's in the graph, removes a directed edge between them.
     ///
     /// Does nothing if the edge does not exist.

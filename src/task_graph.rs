@@ -234,6 +234,11 @@ where
     for read in system.read.iter() {
         for (writer, writer_vertex_id) in systems_and_vertex_ids.iter().rev() {
             if writer.write.contains(read) {
+                // Reverse direction edge already exists - we have a cyclic graph.
+                if graph.has_edge(vertex_id, *writer_vertex_id).unwrap() {
+                    return Err(BuildSystemGraphError::CyclicGraph);
+                }
+
                 graph.add_edge(*writer_vertex_id, vertex_id).unwrap();
                 break;
             }
@@ -245,6 +250,11 @@ where
     for write in system.write.iter() {
         for (writer, writer_vertex_id) in systems_and_vertex_ids.iter().rev() {
             if writer.write.contains(write) {
+                // Reverse direction edge already exists - we have a cyclic graph.
+                if graph.has_edge(vertex_id, *writer_vertex_id).unwrap() {
+                    return Err(BuildSystemGraphError::CyclicGraph);
+                }
+
                 graph.add_edge(*writer_vertex_id, vertex_id).unwrap();
                 break;
             }
