@@ -85,9 +85,9 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
     /// If `root_index` is in range `0 .. num_roots()`, returns the root [`TaskVertex`] at `root_index`.
     ///
     /// [`TaskVertex`]: struct.TaskVertex.html
-    pub fn get_root(&self, root_index: usize) -> Result<&TaskVertex<T>, GetRootError> {
+    pub fn get_root(&self, root_index: usize) -> Result<(&VID, &TaskVertex<T>), GetRootError> {
         let vertex_id = self.roots.get(root_index).ok_or(GetRootError::RootIndexOutOfBounds)?;
-        Ok(self.vertices.get(&vertex_id).expect("Invalid root vertex ID."))
+        Ok((vertex_id, self.vertices.get(&vertex_id).expect("Invalid root vertex ID.")))
     }
 
     /// If `root_index` is in range `0 .. num_roots()`, returns the root [`TaskVertex`] at `root_index`.
@@ -101,7 +101,7 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
     }
 
     /// Returns an iterator over all task graph roots (vertices with no dependencies).
-    pub fn roots(&self) -> TaskVertexIterator<'_, VID, T> {
+    pub fn roots_iter(&self) -> TaskVertexIterator<'_, VID, T> {
         TaskVertexIterator::new(&self.vertices, Some(self.roots.iter()))
     }
 
@@ -144,7 +144,7 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
     }
 
     /// If `vertex_id` is valid, returns an iterator over all vertices dependant on it.
-    pub fn dependencies(&self, vertex_id: VID) -> Result<TaskVertexIterator<'_, VID, T>, AccessVertexError> {
+    pub fn dependencies_iter(&self, vertex_id: VID) -> Result<TaskVertexIterator<'_, VID, T>, AccessVertexError> {
         if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertexID)
         } else {
@@ -216,15 +216,21 @@ impl<'a, VID: VertexID, T> TaskVertexIterator<'a, VID, T> {
 }
 
 impl<'a, VID: VertexID, T> std::iter::Iterator for TaskVertexIterator<'a, VID, T> {
-    type Item = (VID, &'a TaskVertex<T>);
+    type Item = (&'a VID, &'a TaskVertex<T>);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.vertex_ids
             .as_mut()
             .map(|vertex_ids| vertex_ids.next())
             .map_or(None, |vertex_id| {
-                vertex_id.map(|vertex_id| (*vertex_id, self.vertices.get(vertex_id).unwrap()))
+                vertex_id.map(|vertex_id| (vertex_id, self.vertices.get(vertex_id).unwrap()))
             })
+    }
+}
+
+impl<'a, VID: VertexID, T> std::iter::ExactSizeIterator for TaskVertexIterator<'a, VID, T> {
+    fn len(&self) -> usize {
+        self.vertex_ids.as_ref().map_or(0, |vertex_ids| vertex_ids.len())
     }
 }
 
@@ -260,18 +266,27 @@ pub enum BuildSystemGraphError<SID> {
 /// providing the root-to-leaf iteration API for system scheduling.
 ///
 /// [`TaskGraph`]: struct.TaskGraph.html
-pub fn build_system_graph<'a, VID, SID, RID>(
-    systems: &[SystemDesc<'a, SID, RID>],
+// pub fn build_system_graph<'a, 'b: 'a, VID, SID, RID, S>(
+//     systems: S,
+// ) -> Result<TaskGraph<VID, SID>, BuildSystemGraphError<SID>>
+// where
+//     VID: VertexID,
+//     SID: PartialEq + Clone + 'b,
+//     RID: PartialEq + 'b,
+//     S: std::iter::ExactSizeIterator<Item = &'a SystemDesc<'b, SID, RID>>
+pub fn build_system_graph<'a, VID, SID, RID, S>(
+    systems: S,
 ) -> Result<TaskGraph<VID, SID>, BuildSystemGraphError<SID>>
 where
     VID: VertexID,
-    SID: PartialEq + Clone,
-    RID: PartialEq,
+    SID: PartialEq + Clone + 'a,
+    RID: PartialEq + 'a,
+    S: std::iter::Iterator<Item = SystemDesc<'a, SID, RID>>
 {
-    let mut systems_and_vertex_ids = Vec::with_capacity(systems.len());
+    let mut systems_and_vertex_ids = Vec::with_capacity(systems.size_hint().0);
     let mut graph = Graph::new();
 
-    for system in systems.iter() {
+    for system in systems {
         add_system_to_graph(system, &mut graph, &mut systems_and_vertex_ids)?;
     }
 
@@ -282,13 +297,12 @@ where
     Ok(graph.task_graph())
 }
 
-fn add_system_to_graph<'a, 'b, VID, SID, RID>(
-    system: &'b SystemDesc<'b, SID, RID>,
+fn add_system_to_graph<'a, VID, SID, RID>(
+    system: SystemDesc<'a, SID, RID>,
     graph: &mut Graph<VID, SID>,
-    systems_and_vertex_ids: &mut Vec<(&'a SystemDesc<'a, SID, RID>, VID)>,
+    systems_and_vertex_ids: &mut Vec<(SystemDesc<'a, SID, RID>, VID)>,
 ) -> Result<(), BuildSystemGraphError<SID>>
 where
-    'b: 'a,
     VID: VertexID,
     SID: PartialEq + Clone,
     RID: PartialEq,
