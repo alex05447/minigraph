@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
@@ -11,29 +12,58 @@ pub trait VertexID: PrimInt + Unsigned + Hash {}
 
 impl<T: PrimInt + Unsigned + Hash> VertexID for T {}
 
+type Vertices<VID, T> = HashMap<VID, T>;
+type Edges<VID> = HashMap<VID, HashSet<VID>>;
+
+fn num_neighbors_impl<VID: VertexID>(edges: &Edges<VID>, vertex_id: VID) -> usize {
+    edges
+        .get(&vertex_id)
+        .map_or(0, |edges| edges.len())
+}
+
+fn neighbors_impl<VID: VertexID>(edges: &Edges<VID>, vertex_id: VID) -> VertexIDIterator<'_, VID> {
+    VertexIDIterator::new(
+        edges
+            .get(&vertex_id)
+            .map_or(None, |edges| Some(edges.iter())),
+    )
+}
+
 /// Represents a digraph.
 ///
 /// `VID` must be a primitive unsigned integer type, used to ID vertices.
 /// `T` is arbitrary vertex payload.
+#[derive(Clone)]
 pub struct Graph<VID: VertexID, T> {
     vertex_ids: IndexManager<VID>,
 
-    vertices: HashMap<VID, T>,
+    vertices: Vertices<VID, T>,
 
     roots: HashSet<VID>,
     leaves: HashSet<VID>,
 
-    in_edges: HashMap<VID, HashSet<VID>>,
-    out_edges: HashMap<VID, HashSet<VID>>,
+    num_edges: usize,
+    in_edges: Edges<VID>,
+    out_edges: Edges<VID>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum AccessVertexError {
     /// The vertex ID was invalid.
     InvalidVertexID,
 }
 
-#[derive(Debug, PartialEq)]
+impl Display for AccessVertexError {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        use AccessVertexError::*;
+
+        match self {
+            InvalidVertexID => write!(f, "The vertex ID was invalid."),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
 pub enum AddEdgeStatus {
     /// A new directed edge was added to the graph between the two vertices.
     Added,
@@ -41,7 +71,18 @@ pub enum AddEdgeStatus {
     AlreadyExists,
 }
 
-#[derive(Debug, PartialEq)]
+impl Display for AddEdgeStatus {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        use AddEdgeStatus::*;
+
+        match self {
+            Added => write!(f, "A new directed edge was added to the graph between the two vertices."),
+            AlreadyExists => write!(f, "A directed edge between the two vertices already exists."),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
 pub enum RemoveEdgeStatus {
     /// A previously existing directed edge between the two vertices was removed.
     Removed,
@@ -49,12 +90,34 @@ pub enum RemoveEdgeStatus {
     DoesNotExist,
 }
 
-#[derive(Debug, PartialEq)]
+impl Display for RemoveEdgeStatus {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        use RemoveEdgeStatus::*;
+
+        match self {
+            Removed => write!(f, "A previously existing directed edge between the two vertices was removed."),
+            DoesNotExist => write!(f, "A directed edge between the two vertices does not exist."),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
 pub enum EdgeAccessError {
     /// The `from` vertex ID was invalid.
     InvalidFromVertex,
     /// The `to` vertex ID was invalid.
     InvalidToVertex,
+}
+
+impl Display for EdgeAccessError {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        use EdgeAccessError::*;
+
+        match self {
+            InvalidFromVertex => write!(f, "The `from` vertex ID was invalid."),
+            InvalidToVertex => write!(f, "The `to` vertex ID was invalid."),
+        }
+    }
 }
 
 impl<VID: VertexID, T> Graph<VID, T> {
@@ -64,6 +127,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
             vertices: HashMap::new(),
             roots: HashSet::new(),
             leaves: HashSet::new(),
+            num_edges: 0,
             in_edges: HashMap::new(),
             out_edges: HashMap::new(),
         }
@@ -142,7 +206,11 @@ impl<VID: VertexID, T> Graph<VID, T> {
 
     /// Returns an iterator over all vertices in the graph, in no particular order.
     pub fn vertices(&self) -> VertexIterator<'_, VID, T> {
-        VertexIterator::new(self.vertices.iter())
+        Graph::vertices_impl(&self.vertices)
+    }
+
+    pub fn vertices_impl(vertices: &Vertices<VID, T>) -> VertexIterator<'_, VID, T> {
+        VertexIterator::new(vertices.iter())
     }
 
     /// If `from` and `to` are valid vertex ID's in the graph, adds a directed edge between them.
@@ -171,7 +239,10 @@ impl<VID: VertexID, T> Graph<VID, T> {
                 .or_insert(HashSet::new())
                 .insert(to)
         {
+            self.num_edges += 1;
+
             Ok(AddEdgeStatus::Added)
+
         } else {
             Ok(AddEdgeStatus::AlreadyExists)
         }
@@ -208,47 +279,70 @@ impl<VID: VertexID, T> Graph<VID, T> {
             return Err(EdgeAccessError::InvalidToVertex);
         }
 
-        if let Some(in_edges) = self.in_edges.get_mut(&to) {
-            if !in_edges.remove(&from) {
-                return Ok(RemoveEdgeStatus::DoesNotExist);
+        Ok(
+            Self::remove_edge_impl(
+                &mut self.roots,
+                &mut self.leaves,
+                &mut self.num_edges,
+                &mut self.in_edges,
+                &mut self.out_edges,
+                from,
+                to,
+            )
+        )
+    }
+
+    fn remove_edge_impl(
+        roots: &mut HashSet<VID>,
+        leaves: &mut HashSet<VID>,
+        num_edges: &mut usize,
+        in_edges: &mut Edges<VID>,
+        out_edges: &mut Edges<VID>,
+
+        from: VID,
+        to: VID
+    ) -> RemoveEdgeStatus {
+        if let Some(to_in_edges) = in_edges.get_mut(&to) {
+            if !to_in_edges.remove(&from) {
+                return RemoveEdgeStatus::DoesNotExist;
             }
 
-            if in_edges.is_empty() {
-                self.in_edges.remove(&to);
+            if to_in_edges.is_empty() {
+                in_edges.remove(&to);
             }
         } else {
-            return Ok(RemoveEdgeStatus::DoesNotExist);
+            return RemoveEdgeStatus::DoesNotExist;
         }
 
-        let out_edges = self
-            .out_edges
+        debug_assert!(*num_edges > 0);
+        *num_edges -= 1;
+
+        let from_out_edges = out_edges
             .get_mut(&from)
             .expect("In / out edge mismatch.");
 
-        out_edges.take(&to).expect("In / out edge mismatch.");
+        from_out_edges.take(&to).expect("In / out edge mismatch.");
 
-        if out_edges.is_empty() {
-            self.out_edges.remove(&from);
+        if from_out_edges.is_empty() {
+            out_edges.remove(&from);
         }
 
-        if self.num_in_neighbors(to).unwrap() == 0 {
-            let was_not_a_root = self.roots.insert(to);
+        if num_neighbors_impl(in_edges, to) == 0 {
+            let was_not_a_root = roots.insert(to);
             assert!(was_not_a_root, "Root vertex had inbound edges.")
         }
 
-        if self.num_out_neighbors(from).unwrap() == 0 {
-            let was_not_a_leaf = self.leaves.insert(from);
+        if num_neighbors_impl(out_edges, from) == 0 {
+            let was_not_a_leaf = leaves.insert(from);
             assert!(was_not_a_leaf, "Leaf vertex had outbound edges.")
         }
 
-        Ok(RemoveEdgeStatus::Removed)
+        RemoveEdgeStatus::Removed
     }
 
     /// Returns the current number of edges in the graph.
     pub fn num_edges(&self) -> usize {
-        let num_edges = self.in_edges.len();
-        debug_assert_eq!(num_edges, self.out_edges.len(), "In / out edge mismatch.");
-        num_edges
+        self.num_edges
     }
 
     /// Returns the current number of root vertices (with no inbound edges) in the graph.
@@ -276,10 +370,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
         if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertexID)
         } else {
-            Ok(self
-                .in_edges
-                .get(&vertex_id)
-                .map_or(0, |in_edges| in_edges.len()))
+            Ok(num_neighbors_impl(&self.in_edges, vertex_id))
         }
     }
 
@@ -291,11 +382,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
         if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertexID)
         } else {
-            Ok(VertexIDIterator::new(
-                self.in_edges
-                    .get(&vertex_id)
-                    .map_or(None, |in_edges| Some(in_edges.iter())),
-            ))
+            Ok(neighbors_impl(&self.in_edges, vertex_id))
         }
     }
 
@@ -304,10 +391,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
         if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertexID)
         } else {
-            Ok(self
-                .out_edges
-                .get(&vertex_id)
-                .map_or(0, |out_edges| out_edges.len()))
+            Ok(num_neighbors_impl(&self.out_edges, vertex_id))
         }
     }
 
@@ -319,16 +403,130 @@ impl<VID: VertexID, T> Graph<VID, T> {
         if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertexID)
         } else {
-            Ok(VertexIDIterator::new(
-                self.out_edges
-                    .get(&vertex_id)
-                    .map_or(None, |out_edges| Some(out_edges.iter())),
-            ))
+            Ok(neighbors_impl(&self.out_edges, vertex_id))
+        }
+    }
+
+    /// Returns `true` if the graph contains a cycle.
+    pub fn is_cyclic(&self) -> bool {
+        if self.num_vertices() > 0 && (self.num_roots() == 0 || self.num_leaves() == 0) {
+            return true;
+        }
+
+        for root in self.roots() {
+            let mut stack = HashSet::new();
+
+            if self.is_cyclic_dfs(*root, &mut stack) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn is_cyclic_dfs(&self, vertex: VID, stack: &mut HashSet<VID>) -> bool {
+        for child in self.out_neighbors(vertex).unwrap() {
+            if stack.contains(child) {
+                return true;
+            }
+
+            stack.insert(*child);
+
+            if self.is_cyclic_dfs(*child, stack) {
+                return true;
+            }
+
+            stack.remove(child);
+        }
+
+        false
+    }
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub enum TransitiveReductionError {
+    /// The graph contains a cycle and the transitive reduction is non-unique.
+    CyclicGraph,
+}
+
+impl Display for TransitiveReductionError {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        use TransitiveReductionError::*;
+
+        match self {
+            CyclicGraph => write!(f, "The graph contains a cycle and the transitive reduction is non-unique."),
         }
     }
 }
 
 impl<VID: VertexID, T: Clone> Graph<VID, T> {
+    /// Returns a copy of the graph with redundant transitive edges removed.
+    ///
+    /// The implementation is suboptimal but gets the job done for relatively small graphs.
+    ///
+    /// https://en.wikipedia.org/wiki/Transitive_reduction
+    pub fn transitive_reduction(&self) -> Result<Self, TransitiveReductionError> {
+        use TransitiveReductionError::*;
+
+        if self.is_cyclic() {
+            return Err(CyclicGraph);
+        }
+
+        let mut graph = self.clone();
+
+        let vertices = graph.vertices().map(|(vid, _)| *vid).collect::<Vec<_>>();
+
+        for vertex in vertices.iter() {
+            let mut processed_set = HashSet::new();
+
+            let children = graph.out_neighbors(*vertex).unwrap().map(|vid| *vid).collect::<Vec<_>>();
+
+            for child in children.iter() {
+                graph.transitive_reduction_process_vertex(
+                    *vertex,
+                    *child,
+                    &mut processed_set,
+                );
+            }
+        }
+
+        Ok(graph)
+    }
+
+    fn transitive_reduction_process_vertex(
+        &mut self,
+        vertex: VID,
+        child: VID,
+        processed_set: &mut HashSet<VID>,
+    ) {
+        if processed_set.contains(&child) {
+            return;
+        }
+
+        let children = self.out_neighbors(child).unwrap().map(|vid| *vid).collect::<Vec<_>>();
+
+        for _child in children.iter() {
+            Self::remove_edge_impl(
+                &mut self.roots,
+                &mut self.leaves,
+                &mut self.num_edges,
+                &mut self.in_edges,
+                &mut self.out_edges,
+
+                vertex,
+                *_child,
+            );
+
+            self.transitive_reduction_process_vertex(
+                vertex,
+                *_child,
+                processed_set,
+            );
+        }
+
+        processed_set.insert(child);
+    }
+
     /// Creates a [`TaskGraph`] representation of the graph.
     ///
     /// [`TaskGraph`]: struct.TaskGraph.html
@@ -536,5 +734,263 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn non_cyclic() {
+        // { A -> B -> C -> D -> E; A -> F; D -> F }
+
+        let mut graph = Graph::<u32, ()>::new();
+
+        let a = graph.add_vertex(());
+        let b = graph.add_vertex(());
+        let c = graph.add_vertex(());
+        let d = graph.add_vertex(());
+        let e = graph.add_vertex(());
+        let f = graph.add_vertex(());
+
+        graph.add_edge(a, b).unwrap();
+        graph.add_edge(b, c).unwrap();
+        graph.add_edge(c, d).unwrap();
+        graph.add_edge(d, e).unwrap();
+
+        graph.add_edge(a, f).unwrap();
+        graph.add_edge(d, f).unwrap();
+
+        assert_eq!(graph.num_vertices(), 6);
+        assert_eq!(graph.num_edges(), 6);
+        assert_eq!(graph.num_roots(), 1);
+        assert_eq!(graph.num_leaves(), 2);
+
+        assert!(!graph.is_cyclic());
+    }
+
+    #[test]
+    fn cyclic() {
+        // { A -> B -> C -> D -> E; D -> F -> B }
+
+        let mut graph = Graph::<u32, ()>::new();
+
+        let a = graph.add_vertex(());
+        let b = graph.add_vertex(());
+        let c = graph.add_vertex(());
+        let d = graph.add_vertex(());
+        let e = graph.add_vertex(());
+        let f = graph.add_vertex(());
+
+        graph.add_edge(a, b).unwrap();
+        graph.add_edge(b, c).unwrap();
+        graph.add_edge(c, d).unwrap();
+        graph.add_edge(d, e).unwrap();
+
+        graph.add_edge(d, f).unwrap();
+        graph.add_edge(f, b).unwrap();
+
+        assert_eq!(graph.num_vertices(), 6);
+        assert_eq!(graph.num_edges(), 6);
+        assert_eq!(graph.num_roots(), 1);
+        assert_eq!(graph.num_leaves(), 1);
+
+        assert!(graph.is_cyclic());
+    }
+
+    #[test]
+    fn transitive_reduction() {
+        // { A -> B -> C -> D; A -> C; A -> D } => { A -> B -> C -> D }
+
+        let mut graph = Graph::<u32, ()>::new();
+
+        let a = graph.add_vertex(());
+        let b = graph.add_vertex(());
+        let c = graph.add_vertex(());
+        let d = graph.add_vertex(());
+
+        graph.add_edge(a, b).unwrap();
+        graph.add_edge(b, c).unwrap();
+        graph.add_edge(c, d).unwrap();
+
+        graph.add_edge(a, c).unwrap(); // Redundant edge.
+        graph.add_edge(a, d).unwrap(); // Redundant edge.
+
+        assert_eq!(graph.num_vertices(), 4);
+        assert_eq!(graph.num_edges(), 5);
+        assert_eq!(graph.num_roots(), 1);
+        assert_eq!(graph.num_leaves(), 1);
+
+        let reduced_graph = graph.transitive_reduction().unwrap();
+
+        assert_eq!(reduced_graph.num_vertices(), 4);
+        assert_eq!(reduced_graph.num_edges(), 3);
+        assert_eq!(reduced_graph.num_roots(), 1);
+        assert_eq!(reduced_graph.num_leaves(), 1);
+
+        for root in reduced_graph.roots() {
+            assert_eq!(*root, a);
+
+            assert_eq!(reduced_graph.num_out_neighbors(*root).unwrap(), 1);
+
+            for child in reduced_graph.out_neighbors(*root).unwrap() {
+                assert_eq!(*child, b);
+
+                assert_eq!(reduced_graph.num_out_neighbors(*child).unwrap(), 1);
+
+                for child in reduced_graph.out_neighbors(*child).unwrap() {
+                    assert_eq!(*child, c);
+
+                    assert_eq!(reduced_graph.num_out_neighbors(*child).unwrap(), 1);
+
+                    for child in reduced_graph.out_neighbors(*child).unwrap() {
+                        assert_eq!(*child, d);
+
+                        assert_eq!(reduced_graph.num_out_neighbors(*child).unwrap(), 0);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn transitive_reduction_non_root() {
+        // { A -> B -> C -> D -> E; B -> D; B -> E } => { A -> B -> C -> D -> E }
+
+        let mut graph = Graph::<u32, ()>::new();
+
+        let a = graph.add_vertex(());
+        let b = graph.add_vertex(());
+        let c = graph.add_vertex(());
+        let d = graph.add_vertex(());
+        let e = graph.add_vertex(());
+
+        graph.add_edge(a, b).unwrap();
+        graph.add_edge(b, c).unwrap();
+        graph.add_edge(c, d).unwrap();
+        graph.add_edge(d, e).unwrap();
+
+        graph.add_edge(b, d).unwrap(); // Redundant edge.
+        graph.add_edge(b, e).unwrap(); // Redundant edge.
+
+        assert_eq!(graph.num_vertices(), 5);
+        assert_eq!(graph.num_edges(), 6);
+        assert_eq!(graph.num_roots(), 1);
+        assert_eq!(graph.num_leaves(), 1);
+
+        let reduced_graph = graph.transitive_reduction().unwrap();
+
+        assert_eq!(reduced_graph.num_vertices(), 5);
+        assert_eq!(reduced_graph.num_edges(), 4);
+        assert_eq!(reduced_graph.num_roots(), 1);
+        assert_eq!(reduced_graph.num_leaves(), 1);
+
+        for root in reduced_graph.roots() {
+            assert_eq!(*root, a);
+
+            assert_eq!(reduced_graph.num_out_neighbors(*root).unwrap(), 1);
+
+            for child in reduced_graph.out_neighbors(*root).unwrap() {
+                assert_eq!(*child, b);
+
+                assert_eq!(reduced_graph.num_out_neighbors(*child).unwrap(), 1);
+
+                for child in reduced_graph.out_neighbors(*child).unwrap() {
+                    assert_eq!(*child, c);
+
+                    assert_eq!(reduced_graph.num_out_neighbors(*child).unwrap(), 1);
+
+                    for child in reduced_graph.out_neighbors(*child).unwrap() {
+                        assert_eq!(*child, d);
+
+                        assert_eq!(reduced_graph.num_out_neighbors(*child).unwrap(), 1);
+
+                        for child in reduced_graph.out_neighbors(*child).unwrap() {
+                            assert_eq!(*child, e);
+
+                            assert_eq!(reduced_graph.num_out_neighbors(*child).unwrap(), 0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn transitive_reduction_cycle_no_roots() {
+        // { A -> B -> C -> A }
+
+        let mut graph = Graph::<u32, ()>::new();
+
+        let a = graph.add_vertex(());
+        let b = graph.add_vertex(());
+        let c = graph.add_vertex(());
+
+        graph.add_edge(a, b).unwrap();
+        graph.add_edge(b, c).unwrap();
+        graph.add_edge(c, a).unwrap();
+
+        assert_eq!(graph.num_vertices(), 3);
+        assert_eq!(graph.num_edges(), 3);
+        assert_eq!(graph.num_roots(), 0);
+        assert_eq!(graph.num_leaves(), 0);
+
+        assert_eq!(graph.transitive_reduction().err().unwrap(), TransitiveReductionError::CyclicGraph);
+    }
+
+    #[test]
+    fn transitive_reduction_cycle_inner() {
+        // { A -> B -> C -> D -> E; D -> F -> B }
+
+        let mut graph = Graph::<u32, ()>::new();
+
+        let a = graph.add_vertex(());
+        let b = graph.add_vertex(());
+        let c = graph.add_vertex(());
+        let d = graph.add_vertex(());
+        let e = graph.add_vertex(());
+        let f = graph.add_vertex(());
+
+        graph.add_edge(a, b).unwrap();
+        graph.add_edge(b, c).unwrap();
+        graph.add_edge(c, d).unwrap();
+        graph.add_edge(d, e).unwrap();
+
+        graph.add_edge(d, f).unwrap();
+        graph.add_edge(f, b).unwrap();
+
+        assert_eq!(graph.num_vertices(), 6);
+        assert_eq!(graph.num_edges(), 6);
+        assert_eq!(graph.num_roots(), 1);
+        assert_eq!(graph.num_leaves(), 1);
+
+        assert_eq!(graph.transitive_reduction().err().unwrap(), TransitiveReductionError::CyclicGraph);
+    }
+
+    #[test]
+    fn transitive_reduction_cycle_inner_non_root() {
+        // { A -> B -> C -> D -> E -> F; E -> G -> C }
+
+        let mut graph = Graph::<u32, ()>::new();
+
+        let a = graph.add_vertex(());
+        let b = graph.add_vertex(());
+        let c = graph.add_vertex(());
+        let d = graph.add_vertex(());
+        let e = graph.add_vertex(());
+        let f = graph.add_vertex(());
+        let g = graph.add_vertex(());
+
+        graph.add_edge(a, b).unwrap();
+        graph.add_edge(b, c).unwrap();
+        graph.add_edge(c, d).unwrap();
+        graph.add_edge(d, e).unwrap();
+        graph.add_edge(e, f).unwrap();
+
+        graph.add_edge(e, g).unwrap();
+        graph.add_edge(g, c).unwrap();
+
+        assert_eq!(graph.num_vertices(), 7);
+        assert_eq!(graph.num_edges(), 7);
+        assert_eq!(graph.num_roots(), 1);
+        assert_eq!(graph.num_leaves(), 1);
+
+        assert_eq!(graph.transitive_reduction().err().unwrap(), TransitiveReductionError::CyclicGraph);
     }
 }

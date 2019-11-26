@@ -7,6 +7,5 @@ pub use graph::{
 };
 
 pub use task_graph::{
-    build_system_graph, BuildSystemGraphError, SystemDesc, TaskGraph, TaskVertex,
-    TaskVertexIterator,
+    TaskGraph, TaskVertex, TaskVertexIterator,
 };
