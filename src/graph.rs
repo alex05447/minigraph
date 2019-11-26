@@ -102,20 +102,23 @@ impl Display for RemoveEdgeStatus {
 }
 
 #[derive(Clone, PartialEq, Debug)]
-pub enum EdgeAccessError {
+pub enum AccessEdgeError {
     /// The `from` vertex ID was invalid.
     InvalidFromVertex,
     /// The `to` vertex ID was invalid.
     InvalidToVertex,
+    /// Loop edge (`from` and `to` vertices are the same).
+    LoopEdge,
 }
 
-impl Display for EdgeAccessError {
+impl Display for AccessEdgeError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        use EdgeAccessError::*;
+        use AccessEdgeError::*;
 
         match self {
             InvalidFromVertex => write!(f, "The `from` vertex ID was invalid."),
             InvalidToVertex => write!(f, "The `to` vertex ID was invalid."),
+            LoopEdge => write!(f, "Loop edge (`from` and `to` vertices are the same)."),
         }
     }
 }
@@ -216,13 +219,19 @@ impl<VID: VertexID, T> Graph<VID, T> {
     /// If `from` and `to` are valid vertex ID's in the graph, adds a directed edge between them.
     ///
     /// Does nothing if the edge already exists.
-    pub fn add_edge(&mut self, from: VID, to: VID) -> Result<AddEdgeStatus, EdgeAccessError> {
+    pub fn add_edge(&mut self, from: VID, to: VID) -> Result<AddEdgeStatus, AccessEdgeError> {
+        use AccessEdgeError::*;
+
         if !self.vertices.contains_key(&from) {
-            return Err(EdgeAccessError::InvalidFromVertex);
+            return Err(InvalidFromVertex);
         }
 
         if !self.vertices.contains_key(&to) {
-            return Err(EdgeAccessError::InvalidToVertex);
+            return Err(InvalidToVertex);
+        }
+
+        if from == to {
+            return Err(LoopEdge);
         }
 
         self.roots.remove(&to);
@@ -250,13 +259,19 @@ impl<VID: VertexID, T> Graph<VID, T> {
 
     /// If `from` and `to` are valid vertex ID's in the graph, returns `true` if a directed edge exists in the graph
     /// between vertices `from` and `to`.
-    pub fn has_edge(&self, from: VID, to: VID) -> Result<bool, EdgeAccessError> {
+    pub fn has_edge(&self, from: VID, to: VID) -> Result<bool, AccessEdgeError> {
+        use AccessEdgeError::*;
+
         if !self.vertices.contains_key(&from) {
-            return Err(EdgeAccessError::InvalidFromVertex);
+            return Err(InvalidFromVertex);
         }
 
         if !self.vertices.contains_key(&to) {
-            return Err(EdgeAccessError::InvalidToVertex);
+            return Err(InvalidToVertex);
+        }
+
+        if from == to {
+            return Err(LoopEdge);
         }
 
         if let Some(out_edges) = self.out_edges.get(&from) {
@@ -270,13 +285,19 @@ impl<VID: VertexID, T> Graph<VID, T> {
     /// If `from` and `to` are valid vertex ID's in the graph, removes a directed edge between them.
     ///
     /// Does nothing if the edge does not exist.
-    pub fn remove_edge(&mut self, from: VID, to: VID) -> Result<RemoveEdgeStatus, EdgeAccessError> {
+    pub fn remove_edge(&mut self, from: VID, to: VID) -> Result<RemoveEdgeStatus, AccessEdgeError> {
+        use AccessEdgeError::*;
+
         if !self.vertices.contains_key(&from) {
-            return Err(EdgeAccessError::InvalidFromVertex);
+            return Err(InvalidFromVertex);
         }
 
         if !self.vertices.contains_key(&to) {
-            return Err(EdgeAccessError::InvalidToVertex);
+            return Err(InvalidToVertex);
+        }
+
+        if from == to {
+            return Err(LoopEdge);
         }
 
         Ok(
