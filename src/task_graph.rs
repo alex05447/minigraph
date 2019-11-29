@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::graph::{Graph, VertexID, AccessVertexError};
+use super::graph::{AccessVertexError, Graph, VertexID};
 
 /// Task graph vertex payload wrapper which tracks the vertice's dependency completion
 /// during task graph (parallel) execution.
@@ -86,8 +86,16 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
     ///
     /// [`TaskVertex`]: struct.TaskVertex.html
     pub fn get_root(&self, root_index: usize) -> Result<(&VID, &TaskVertex<T>), GetRootError> {
-        let vertex_id = self.roots.get(root_index).ok_or(GetRootError::RootIndexOutOfBounds)?;
-        Ok((vertex_id, self.vertices.get(&vertex_id).expect("Invalid root vertex ID.")))
+        let vertex_id = self
+            .roots
+            .get(root_index)
+            .ok_or(GetRootError::RootIndexOutOfBounds)?;
+        Ok((
+            vertex_id,
+            self.vertices
+                .get(&vertex_id)
+                .expect("Invalid root vertex ID."),
+        ))
     }
 
     /// If `root_index` is in range `0 .. num_roots()`, returns the root [`TaskVertex`] at `root_index`.
@@ -97,7 +105,12 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
     /// [`TaskVertex`]: struct.TaskVertex.html
     pub unsafe fn get_root_unchecked(&self, root_index: usize) -> (&VID, &TaskVertex<T>) {
         let vertex_id = self.roots.get_unchecked(root_index);
-        (vertex_id, self.vertices.get(&vertex_id).expect("Invalid root vertex ID."))
+        (
+            vertex_id,
+            self.vertices
+                .get(&vertex_id)
+                .expect("Invalid root vertex ID."),
+        )
     }
 
     /// Returns an iterator over all task graph roots (vertices with no dependencies).
@@ -121,13 +134,27 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
     /// returns the dependency [`TaskVertex`] at `dependency_index`.
     ///
     /// [`TaskVertex`]: struct.TaskVertex.html
-    pub fn get_dependency(&self, vertex_id: VID, dependency_index: usize) -> Result<(&VID, &TaskVertex<T>), GetDependencyError> {
+    pub fn get_dependency(
+        &self,
+        vertex_id: VID,
+        dependency_index: usize,
+    ) -> Result<(&VID, &TaskVertex<T>), GetDependencyError> {
         if !self.vertices.contains_key(&vertex_id) {
             Err(GetDependencyError::InvalidVertexID)
         } else {
-            let dependencies = self.out_edges.get(&vertex_id).ok_or(GetDependencyError::DependencyIndexOutOfBounds)?;
-            let dependency_vertex_id = dependencies.get(dependency_index).ok_or(GetDependencyError::DependencyIndexOutOfBounds)?;
-            Ok((dependency_vertex_id, self.vertices.get(&dependency_vertex_id).expect("Invalid dependency vertex ID.")))
+            let dependencies = self
+                .out_edges
+                .get(&vertex_id)
+                .ok_or(GetDependencyError::DependencyIndexOutOfBounds)?;
+            let dependency_vertex_id = dependencies
+                .get(dependency_index)
+                .ok_or(GetDependencyError::DependencyIndexOutOfBounds)?;
+            Ok((
+                dependency_vertex_id,
+                self.vertices
+                    .get(&dependency_vertex_id)
+                    .expect("Invalid dependency vertex ID."),
+            ))
         }
     }
 
@@ -137,14 +164,26 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
     /// Otherwise panics.
     ///
     /// [`TaskVertex`]: struct.TaskVertex.html
-    pub unsafe fn get_dependency_unchecked(&self, vertex_id: VID, dependency_index: usize) -> (&VID, &TaskVertex<T>) {
+    pub unsafe fn get_dependency_unchecked(
+        &self,
+        vertex_id: VID,
+        dependency_index: usize,
+    ) -> (&VID, &TaskVertex<T>) {
         let dependencies = self.out_edges.get(&vertex_id).expect("Invalid vertex ID.");
         let dependency_vertex_id = dependencies.get_unchecked(dependency_index);
-        (dependency_vertex_id, self.vertices.get(&dependency_vertex_id).expect("Invalid dependency vertex ID."))
+        (
+            dependency_vertex_id,
+            self.vertices
+                .get(&dependency_vertex_id)
+                .expect("Invalid dependency vertex ID."),
+        )
     }
 
     /// If `vertex_id` is valid, returns an iterator over all vertices dependant on it.
-    pub fn dependencies_iter(&self, vertex_id: VID) -> Result<TaskVertexIterator<'_, VID, T>, AccessVertexError> {
+    pub fn dependencies_iter(
+        &self,
+        vertex_id: VID,
+    ) -> Result<TaskVertexIterator<'_, VID, T>, AccessVertexError> {
         if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertexID)
         } else {
@@ -230,6 +269,8 @@ impl<'a, VID: VertexID, T> std::iter::Iterator for TaskVertexIterator<'a, VID, T
 
 impl<'a, VID: VertexID, T> std::iter::ExactSizeIterator for TaskVertexIterator<'a, VID, T> {
     fn len(&self) -> usize {
-        self.vertex_ids.as_ref().map_or(0, |vertex_ids| vertex_ids.len())
+        self.vertex_ids
+            .as_ref()
+            .map_or(0, |vertex_ids| vertex_ids.len())
     }
 }

@@ -1,5 +1,5 @@
-use std::fmt::{Display, Formatter};
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 
 use super::task_graph::TaskGraph;
@@ -16,9 +16,7 @@ type Vertices<VID, T> = HashMap<VID, T>;
 type Edges<VID> = HashMap<VID, HashSet<VID>>;
 
 fn num_neighbors_impl<VID: VertexID>(edges: &Edges<VID>, vertex_id: VID) -> usize {
-    edges
-        .get(&vertex_id)
-        .map_or(0, |edges| edges.len())
+    edges.get(&vertex_id).map_or(0, |edges| edges.len())
 }
 
 fn neighbors_impl<VID: VertexID>(edges: &Edges<VID>, vertex_id: VID) -> VertexIDIterator<'_, VID> {
@@ -76,8 +74,14 @@ impl Display for AddEdgeStatus {
         use AddEdgeStatus::*;
 
         match self {
-            Added => write!(f, "A new directed edge was added to the graph between the two vertices."),
-            AlreadyExists => write!(f, "A directed edge between the two vertices already exists."),
+            Added => write!(
+                f,
+                "A new directed edge was added to the graph between the two vertices."
+            ),
+            AlreadyExists => write!(
+                f,
+                "A directed edge between the two vertices already exists."
+            ),
         }
     }
 }
@@ -95,8 +99,14 @@ impl Display for RemoveEdgeStatus {
         use RemoveEdgeStatus::*;
 
         match self {
-            Removed => write!(f, "A previously existing directed edge between the two vertices was removed."),
-            DoesNotExist => write!(f, "A directed edge between the two vertices does not exist."),
+            Removed => write!(
+                f,
+                "A previously existing directed edge between the two vertices was removed."
+            ),
+            DoesNotExist => write!(
+                f,
+                "A directed edge between the two vertices does not exist."
+            ),
         }
     }
 }
@@ -251,7 +261,6 @@ impl<VID: VertexID, T> Graph<VID, T> {
             self.num_edges += 1;
 
             Ok(AddEdgeStatus::Added)
-
         } else {
             Ok(AddEdgeStatus::AlreadyExists)
         }
@@ -276,7 +285,6 @@ impl<VID: VertexID, T> Graph<VID, T> {
 
         if let Some(out_edges) = self.out_edges.get(&from) {
             Ok(out_edges.contains(&to))
-
         } else {
             Ok(false)
         }
@@ -300,17 +308,15 @@ impl<VID: VertexID, T> Graph<VID, T> {
             return Err(LoopEdge);
         }
 
-        Ok(
-            Self::remove_edge_impl(
-                &mut self.roots,
-                &mut self.leaves,
-                &mut self.num_edges,
-                &mut self.in_edges,
-                &mut self.out_edges,
-                from,
-                to,
-            )
-        )
+        Ok(Self::remove_edge_impl(
+            &mut self.roots,
+            &mut self.leaves,
+            &mut self.num_edges,
+            &mut self.in_edges,
+            &mut self.out_edges,
+            from,
+            to,
+        ))
     }
 
     fn remove_edge_impl(
@@ -321,7 +327,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
         out_edges: &mut Edges<VID>,
 
         from: VID,
-        to: VID
+        to: VID,
     ) -> RemoveEdgeStatus {
         if let Some(to_in_edges) = in_edges.get_mut(&to) {
             if !to_in_edges.remove(&from) {
@@ -338,9 +344,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
         debug_assert!(*num_edges > 0);
         *num_edges -= 1;
 
-        let from_out_edges = out_edges
-            .get_mut(&from)
-            .expect("In / out edge mismatch.");
+        let from_out_edges = out_edges.get_mut(&from).expect("In / out edge mismatch.");
 
         from_out_edges.take(&to).expect("In / out edge mismatch.");
 
@@ -475,7 +479,10 @@ impl Display for TransitiveReductionError {
         use TransitiveReductionError::*;
 
         match self {
-            CyclicGraph => write!(f, "The graph contains a cycle and the transitive reduction is non-unique."),
+            CyclicGraph => write!(
+                f,
+                "The graph contains a cycle and the transitive reduction is non-unique."
+            ),
         }
     }
 }
@@ -500,14 +507,14 @@ impl<VID: VertexID, T: Clone> Graph<VID, T> {
         for vertex in vertices.iter() {
             let mut processed_set = HashSet::new();
 
-            let children = graph.out_neighbors(*vertex).unwrap().map(|vid| *vid).collect::<Vec<_>>();
+            let children = graph
+                .out_neighbors(*vertex)
+                .unwrap()
+                .map(|vid| *vid)
+                .collect::<Vec<_>>();
 
             for child in children.iter() {
-                graph.transitive_reduction_process_vertex(
-                    *vertex,
-                    *child,
-                    &mut processed_set,
-                );
+                graph.transitive_reduction_process_vertex(*vertex, *child, &mut processed_set);
             }
         }
 
@@ -524,7 +531,11 @@ impl<VID: VertexID, T: Clone> Graph<VID, T> {
             return;
         }
 
-        let children = self.out_neighbors(child).unwrap().map(|vid| *vid).collect::<Vec<_>>();
+        let children = self
+            .out_neighbors(child)
+            .unwrap()
+            .map(|vid| *vid)
+            .collect::<Vec<_>>();
 
         for _child in children.iter() {
             Self::remove_edge_impl(
@@ -533,16 +544,11 @@ impl<VID: VertexID, T: Clone> Graph<VID, T> {
                 &mut self.num_edges,
                 &mut self.in_edges,
                 &mut self.out_edges,
-
                 vertex,
                 *_child,
             );
 
-            self.transitive_reduction_process_vertex(
-                vertex,
-                *_child,
-                processed_set,
-            );
+            self.transitive_reduction_process_vertex(vertex, *_child, processed_set);
         }
 
         processed_set.insert(child);
@@ -952,7 +958,10 @@ mod test {
         assert_eq!(graph.num_roots(), 0);
         assert_eq!(graph.num_leaves(), 0);
 
-        assert_eq!(graph.transitive_reduction().err().unwrap(), TransitiveReductionError::CyclicGraph);
+        assert_eq!(
+            graph.transitive_reduction().err().unwrap(),
+            TransitiveReductionError::CyclicGraph
+        );
     }
 
     #[test]
@@ -981,7 +990,10 @@ mod test {
         assert_eq!(graph.num_roots(), 1);
         assert_eq!(graph.num_leaves(), 1);
 
-        assert_eq!(graph.transitive_reduction().err().unwrap(), TransitiveReductionError::CyclicGraph);
+        assert_eq!(
+            graph.transitive_reduction().err().unwrap(),
+            TransitiveReductionError::CyclicGraph
+        );
     }
 
     #[test]
@@ -1012,6 +1024,9 @@ mod test {
         assert_eq!(graph.num_roots(), 1);
         assert_eq!(graph.num_leaves(), 1);
 
-        assert_eq!(graph.transitive_reduction().err().unwrap(), TransitiveReductionError::CyclicGraph);
+        assert_eq!(
+            graph.transitive_reduction().err().unwrap(),
+            TransitiveReductionError::CyclicGraph
+        );
     }
 }
