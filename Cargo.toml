@@ -8,4 +8,4 @@ edition = "2018"
 
 [dependencies]
 num-traits = "0.2"
-minihandle = {path = "../minihandle"}
+minihandle = {path = "../minihandle", features = ["index"]}

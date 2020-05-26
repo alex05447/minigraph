@@ -1,6 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_set};
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
+use std::iter::Iterator;
+use std::error::Error;
 
 use super::task_graph::TaskGraph;
 
@@ -16,7 +18,7 @@ type Vertices<VID, T> = HashMap<VID, T>;
 type Edges<VID> = HashMap<VID, HashSet<VID>>;
 
 fn num_neighbors_impl<VID: VertexID>(edges: &Edges<VID>, vertex_id: VID) -> usize {
-    edges.get(&vertex_id).map_or(0, |edges| edges.len())
+    edges.get(&vertex_id).map_or(0, HashSet::<VID>::len)
 }
 
 fn neighbors_impl<VID: VertexID>(edges: &Edges<VID>, vertex_id: VID) -> VertexIDIterator<'_, VID> {
@@ -45,7 +47,7 @@ pub struct Graph<VID: VertexID, T> {
     out_edges: Edges<VID>,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AccessVertexError {
     /// The vertex ID was invalid.
     InvalidVertexID,
@@ -56,12 +58,14 @@ impl Display for AccessVertexError {
         use AccessVertexError::*;
 
         match self {
-            InvalidVertexID => write!(f, "The vertex ID was invalid."),
+            InvalidVertexID => write!(f, "vertex ID was invalid"),
         }
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+impl Error for AccessVertexError {}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AddEdgeStatus {
     /// A new directed edge was added to the graph between the two vertices.
     Added,
@@ -76,17 +80,17 @@ impl Display for AddEdgeStatus {
         match self {
             Added => write!(
                 f,
-                "A new directed edge was added to the graph between the two vertices."
+                "a new directed edge was added to the graph between the two vertices"
             ),
             AlreadyExists => write!(
                 f,
-                "A directed edge between the two vertices already exists."
+                "a directed edge between the two vertices already exists"
             ),
         }
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RemoveEdgeStatus {
     /// A previously existing directed edge between the two vertices was removed.
     Removed,
@@ -101,17 +105,17 @@ impl Display for RemoveEdgeStatus {
         match self {
             Removed => write!(
                 f,
-                "A previously existing directed edge between the two vertices was removed."
+                "a previously existing directed edge between the two vertices was removed"
             ),
             DoesNotExist => write!(
                 f,
-                "A directed edge between the two vertices does not exist."
+                "a directed edge between the two vertices does not exist"
             ),
         }
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AccessEdgeError {
     /// The `from` vertex ID was invalid.
     InvalidFromVertex,
@@ -121,19 +125,22 @@ pub enum AccessEdgeError {
     LoopEdge,
 }
 
+impl Error for AccessEdgeError {}
+
 impl Display for AccessEdgeError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         use AccessEdgeError::*;
 
         match self {
-            InvalidFromVertex => write!(f, "The `from` vertex ID was invalid."),
-            InvalidToVertex => write!(f, "The `to` vertex ID was invalid."),
-            LoopEdge => write!(f, "Loop edge (`from` and `to` vertices are the same)."),
+            InvalidFromVertex => write!(f, "`from` vertex ID was invalid"),
+            InvalidToVertex => write!(f, "`to` vertex ID was invalid"),
+            LoopEdge => write!(f, "loop edge (`from` and `to` vertices are the same)"),
         }
     }
 }
 
 impl<VID: VertexID, T> Graph<VID, T> {
+    /// Creates a new empty graph.
     pub fn new() -> Self {
         Self {
             vertex_ids: IndexManager::new(),
@@ -210,7 +217,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
             .ok_or(AccessVertexError::InvalidVertexID)
     }
 
-    /// If `vertex_id` is valid, returns the reference to the vertex payload.
+    /// If `vertex_id` is valid, returns the mutable reference to the vertex payload.
     pub fn vertex_mut(&mut self, vertex_id: VID) -> Result<&mut T, AccessVertexError> {
         self.vertices
             .get_mut(&vertex_id)
@@ -218,12 +225,8 @@ impl<VID: VertexID, T> Graph<VID, T> {
     }
 
     /// Returns an iterator over all vertices in the graph, in no particular order.
-    pub fn vertices(&self) -> VertexIterator<'_, VID, T> {
-        Graph::vertices_impl(&self.vertices)
-    }
-
-    pub fn vertices_impl(vertices: &Vertices<VID, T>) -> VertexIterator<'_, VID, T> {
-        VertexIterator::new(vertices.iter())
+    pub fn vertices(&self) -> impl Iterator<Item = (&'_ VID, &'_ T)> {
+        self.vertices.iter()
     }
 
     /// If `from` and `to` are valid vertex ID's in the graph, adds a directed edge between them.
@@ -376,7 +379,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
     }
 
     /// Returns an iterator over all root vertices (with no inbound edges) in the graph, in no particular order.
-    pub fn roots(&self) -> VertexIDIterator<'_, VID> {
+    pub fn roots(&self) -> impl Iterator<Item = &'_ VID> {
         VertexIDIterator::new(Some(self.roots.iter()))
     }
 
@@ -386,7 +389,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
     }
 
     /// Returns an iterator over all leaf vertices (with no outbound edges) in the graph, in no particular order.
-    pub fn leaves(&self) -> VertexIDIterator<'_, VID> {
+    pub fn leaves(&self) -> impl Iterator<Item = &'_ VID> {
         VertexIDIterator::new(Some(self.leaves.iter()))
     }
 
@@ -403,7 +406,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
     pub fn in_neighbors(
         &self,
         vertex_id: VID,
-    ) -> Result<VertexIDIterator<'_, VID>, AccessVertexError> {
+    ) -> Result<impl Iterator<Item = &'_ VID>, AccessVertexError> {
         if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertexID)
         } else {
@@ -424,7 +427,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
     pub fn out_neighbors(
         &self,
         vertex_id: VID,
-    ) -> Result<VertexIDIterator<'_, VID>, AccessVertexError> {
+    ) -> Result<impl Iterator<Item = &'_ VID>, AccessVertexError> {
         if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertexID)
         } else {
@@ -439,9 +442,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
         }
 
         for root in self.roots() {
-            let mut stack = HashSet::new();
-
-            if self.is_cyclic_dfs(*root, &mut stack) {
+            if self.is_cyclic_dfs(*root, &mut HashSet::new()) {
                 return true;
             }
         }
@@ -468,7 +469,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TransitiveReductionError {
     /// The graph contains a cycle and the transitive reduction is non-unique.
     CyclicGraph,
@@ -481,7 +482,7 @@ impl Display for TransitiveReductionError {
         match self {
             CyclicGraph => write!(
                 f,
-                "The graph contains a cycle and the transitive reduction is non-unique."
+                "the graph contains a cycle and the transitive reduction is non-unique"
             ),
         }
     }
@@ -490,7 +491,7 @@ impl Display for TransitiveReductionError {
 impl<VID: VertexID, T: Clone> Graph<VID, T> {
     /// Returns a copy of the graph with redundant transitive edges removed.
     ///
-    /// The implementation is suboptimal but gets the job done for relatively small graphs.
+    /// The implementation is suboptimal, but gets the job done for relatively small graphs.
     ///
     /// https://en.wikipedia.org/wiki/Transitive_reduction
     pub fn transitive_reduction(&self) -> Result<Self, TransitiveReductionError> {
@@ -502,19 +503,13 @@ impl<VID: VertexID, T: Clone> Graph<VID, T> {
 
         let mut graph = self.clone();
 
-        let vertices = graph.vertices().map(|(vid, _)| *vid).collect::<Vec<_>>();
+        let mut processed_set = HashSet::new();
 
-        for vertex in vertices.iter() {
-            let mut processed_set = HashSet::new();
+        for (vertex, _) in &self.vertices {
+            processed_set.clear();
 
-            let children = graph
-                .out_neighbors(*vertex)
-                .unwrap()
-                .map(|vid| *vid)
-                .collect::<Vec<_>>();
-
-            for child in children.iter() {
-                graph.transitive_reduction_process_vertex(*vertex, *child, &mut processed_set);
+            for child in self.out_neighbors(*vertex).unwrap() {
+                graph.transitive_reduction_process_vertex(self, *vertex, *child, &mut processed_set);
             }
         }
 
@@ -523,6 +518,7 @@ impl<VID: VertexID, T: Clone> Graph<VID, T> {
 
     fn transitive_reduction_process_vertex(
         &mut self,
+        orig: &Graph<VID, T>,
         vertex: VID,
         child: VID,
         processed_set: &mut HashSet<VID>,
@@ -531,13 +527,7 @@ impl<VID: VertexID, T: Clone> Graph<VID, T> {
             return;
         }
 
-        let children = self
-            .out_neighbors(child)
-            .unwrap()
-            .map(|vid| *vid)
-            .collect::<Vec<_>>();
-
-        for _child in children.iter() {
+        for _child in orig.out_neighbors(child).unwrap() {
             Self::remove_edge_impl(
                 &mut self.roots,
                 &mut self.leaves,
@@ -548,7 +538,7 @@ impl<VID: VertexID, T: Clone> Graph<VID, T> {
                 *_child,
             );
 
-            self.transitive_reduction_process_vertex(vertex, *_child, processed_set);
+            self.transitive_reduction_process_vertex(orig, vertex, *_child, processed_set);
         }
 
         processed_set.insert(child);
@@ -557,48 +547,29 @@ impl<VID: VertexID, T: Clone> Graph<VID, T> {
     /// Creates a [`TaskGraph`] representation of the graph.
     ///
     /// [`TaskGraph`]: struct.TaskGraph.html
-    pub fn task_graph(&self) -> TaskGraph<VID, T> {
-        TaskGraph::new(self, &self.vertices, &self.roots, &self.out_edges)
+    pub fn task_graph(&self) -> Result<TaskGraph<VID, T>, TransitiveReductionError> {
+        let reduced = self.transitive_reduction()?;
+        Ok(TaskGraph::new(&reduced, &reduced.out_edges))
     }
 }
 
 /// Iterates over graph vertices, returning their vertex ID.
-pub struct VertexIDIterator<'a, VID: VertexID> {
-    vertex_ids: Option<std::collections::hash_set::Iter<'a, VID>>,
-}
+struct VertexIDIterator<'a, VID: VertexID>(Option<hash_set::Iter<'a, VID>>);
 
 impl<'a, VID: VertexID> VertexIDIterator<'a, VID> {
-    pub(super) fn new(vertex_ids: Option<std::collections::hash_set::Iter<'a, VID>>) -> Self {
-        Self { vertex_ids }
+
+    pub(super) fn new(vertex_ids: Option<hash_set::Iter<'a, VID>>) -> Self {
+        Self(vertex_ids)
     }
 }
 
-impl<'a, VID: VertexID> std::iter::Iterator for VertexIDIterator<'a, VID> {
+impl<'a, VID: VertexID> Iterator for VertexIDIterator<'a, VID> {
     type Item = &'a VID;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.vertex_ids
+        self.0
             .as_mut()
-            .map_or(None, |vertex_ids| vertex_ids.next())
-    }
-}
-
-/// Iterates over graph vertices, returning their vertex ID and payload.
-pub struct VertexIterator<'a, VID: VertexID, T> {
-    vertices: std::collections::hash_map::Iter<'a, VID, T>,
-}
-
-impl<'a, VID: VertexID, T> VertexIterator<'a, VID, T> {
-    pub(super) fn new(vertices: std::collections::hash_map::Iter<'a, VID, T>) -> Self {
-        Self { vertices }
-    }
-}
-
-impl<'a, VID: VertexID, T> std::iter::Iterator for VertexIterator<'a, VID, T> {
-    type Item = (&'a VID, &'a T);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.vertices.next()
+            .map_or(None, hash_set::Iter::next)
     }
 }
 
@@ -987,40 +958,6 @@ mod test {
 
         assert_eq!(graph.num_vertices(), 6);
         assert_eq!(graph.num_edges(), 6);
-        assert_eq!(graph.num_roots(), 1);
-        assert_eq!(graph.num_leaves(), 1);
-
-        assert_eq!(
-            graph.transitive_reduction().err().unwrap(),
-            TransitiveReductionError::CyclicGraph
-        );
-    }
-
-    #[test]
-    fn transitive_reduction_cycle_inner_non_root() {
-        // { A -> B -> C -> D -> E -> F; E -> G -> C }
-
-        let mut graph = Graph::<u32, ()>::new();
-
-        let a = graph.add_vertex(());
-        let b = graph.add_vertex(());
-        let c = graph.add_vertex(());
-        let d = graph.add_vertex(());
-        let e = graph.add_vertex(());
-        let f = graph.add_vertex(());
-        let g = graph.add_vertex(());
-
-        graph.add_edge(a, b).unwrap();
-        graph.add_edge(b, c).unwrap();
-        graph.add_edge(c, d).unwrap();
-        graph.add_edge(d, e).unwrap();
-        graph.add_edge(e, f).unwrap();
-
-        graph.add_edge(e, g).unwrap();
-        graph.add_edge(g, c).unwrap();
-
-        assert_eq!(graph.num_vertices(), 7);
-        assert_eq!(graph.num_edges(), 7);
         assert_eq!(graph.num_roots(), 1);
         assert_eq!(graph.num_leaves(), 1);
 

@@ -1,5 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::error::Error;
+use std::fmt::{Display, Formatter};
+use std::iter::{Iterator, ExactSizeIterator};
 
 use super::graph::{AccessVertexError, Graph, VertexID};
 
@@ -56,16 +59,43 @@ pub struct TaskGraph<VID: VertexID, T> {
     out_edges: HashMap<VID, Vec<VID>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GetRootError {
     /// The root vertex index was out of bounds.
     RootIndexOutOfBounds,
 }
 
+impl Error for GetRootError {}
+
+impl Display for GetRootError {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        use GetRootError::*;
+
+        match self {
+            RootIndexOutOfBounds => write!(f, "root vertex index was out of bounds"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GetDependencyError {
     /// The vertex ID was invalid.
     InvalidVertexID,
     /// The dependency vertex index was out of bounds.
     DependencyIndexOutOfBounds,
+}
+
+impl Error for GetDependencyError {}
+
+impl Display for GetDependencyError {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        use GetDependencyError::*;
+
+        match self {
+            InvalidVertexID => write!(f, "vertex ID was invalid"),
+            DependencyIndexOutOfBounds => write!(f, "dependency vertex index was out of bounds"),
+        }
+    }
 }
 
 impl<VID: VertexID, T> TaskGraph<VID, T> {
@@ -114,7 +144,7 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
     }
 
     /// Returns an iterator over all task graph roots (vertices with no dependencies).
-    pub fn roots_iter(&self) -> TaskVertexIterator<'_, VID, T> {
+    pub fn roots(&self) -> impl Iterator<Item = (&'_ VID, &'_ TaskVertex<T>)> {
         TaskVertexIterator::new(&self.vertices, Some(self.roots.iter()))
     }
 
@@ -180,10 +210,10 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
     }
 
     /// If `vertex_id` is valid, returns an iterator over all vertices dependant on it.
-    pub fn dependencies_iter(
+    pub fn dependencies(
         &self,
         vertex_id: VID,
-    ) -> Result<TaskVertexIterator<'_, VID, T>, AccessVertexError> {
+    ) -> Result<impl Iterator<Item = (&'_ VID, &'_ TaskVertex<T>)>, AccessVertexError> {
         if !self.vertices.contains_key(&vertex_id) {
             Err(AccessVertexError::InvalidVertexID)
         } else {
@@ -200,12 +230,9 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
 impl<VID: VertexID, T: Clone> TaskGraph<VID, T> {
     pub(super) fn new(
         graph: &Graph<VID, T>,
-        vertices: &HashMap<VID, T>,
-        roots: &HashSet<VID>,
         out_edges: &HashMap<VID, HashSet<VID>>,
     ) -> Self {
-        let vertices = vertices
-            .iter()
+        let vertices = graph.vertices()
             .map(|(vertex_id, vertex)| {
                 (
                     *vertex_id,
@@ -214,7 +241,7 @@ impl<VID: VertexID, T: Clone> TaskGraph<VID, T> {
             })
             .collect();
 
-        let roots = roots.iter().map(|vertex_id| *vertex_id).collect();
+        let roots = graph.roots().map(|vertex_id| *vertex_id).collect();
 
         let out_edges = out_edges
             .iter()
@@ -237,7 +264,7 @@ impl<VID: VertexID, T: Clone> TaskGraph<VID, T> {
 /// Iterates over [`TaskVertex`]'s, returning their vertex ID and payload.
 ///
 /// [`TaskVertex`]: struct.TaskVertex.html
-pub struct TaskVertexIterator<'a, VID: VertexID, T> {
+struct TaskVertexIterator<'a, VID: VertexID, T> {
     vertices: &'a HashMap<VID, TaskVertex<T>>,
     vertex_ids: Option<std::slice::Iter<'a, VID>>,
 }
@@ -254,7 +281,7 @@ impl<'a, VID: VertexID, T> TaskVertexIterator<'a, VID, T> {
     }
 }
 
-impl<'a, VID: VertexID, T> std::iter::Iterator for TaskVertexIterator<'a, VID, T> {
+impl<'a, VID: VertexID, T> Iterator for TaskVertexIterator<'a, VID, T> {
     type Item = (&'a VID, &'a TaskVertex<T>);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -267,7 +294,7 @@ impl<'a, VID: VertexID, T> std::iter::Iterator for TaskVertexIterator<'a, VID, T
     }
 }
 
-impl<'a, VID: VertexID, T> std::iter::ExactSizeIterator for TaskVertexIterator<'a, VID, T> {
+impl<'a, VID: VertexID, T> ExactSizeIterator for TaskVertexIterator<'a, VID, T> {
     fn len(&self) -> usize {
         self.vertex_ids
             .as_ref()
