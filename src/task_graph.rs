@@ -1,26 +1,28 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::error::Error;
-use std::fmt::{Display, Formatter};
-use std::iter::{Iterator, ExactSizeIterator};
-
-use super::graph::{AccessVertexError, Graph, VertexID};
+use {
+    std::{collections::{HashMap, HashSet}, sync::atomic::{AtomicUsize, Ordering}, error::Error, fmt::{Display, Formatter}, iter::{Iterator, ExactSizeIterator}},
+    super::graph::{AccessVertexError, Graph, VertexID}
+};
 
 /// Task graph vertex payload wrapper which tracks the vertice's dependency completion
 /// during task graph (parallel) execution.
 pub struct TaskVertex<T> {
     /// Vertex payload.
     vertex: T,
-    /// Constant number of inbound edges.
+    /// Constant number of dependencies (inbound edges).
     num_dependencies: usize,
     /// Current number of completed dependencies (inbound edges).
     completed_dependencies: AtomicUsize,
 }
 
 impl<T> TaskVertex<T> {
-    /// Access the vertex payload.
+    /// Accesses the vertex payload.
     pub fn vertex(&self) -> &T {
         &self.vertex
+    }
+
+    /// Accesses the vertex payload.
+    pub fn vertex_mut(&mut self) -> &mut T {
+        &mut self.vertex
     }
 
     /// Increments the completed dependency counter.
@@ -61,7 +63,7 @@ pub struct TaskGraph<VID: VertexID, T> {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GetRootError {
-    /// The root vertex index was out of bounds.
+    /// Root vertex index out of bounds.
     RootIndexOutOfBounds,
 }
 
@@ -72,16 +74,16 @@ impl Display for GetRootError {
         use GetRootError::*;
 
         match self {
-            RootIndexOutOfBounds => write!(f, "root vertex index was out of bounds"),
+            RootIndexOutOfBounds => "root vertex index out of bounds".fmt(f),
         }
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GetDependencyError {
-    /// The vertex ID was invalid.
+    /// Invalid vertex ID.
     InvalidVertexID,
-    /// The dependency vertex index was out of bounds.
+    /// Dependency vertex index out of bounds.
     DependencyIndexOutOfBounds,
 }
 
@@ -92,8 +94,8 @@ impl Display for GetDependencyError {
         use GetDependencyError::*;
 
         match self {
-            InvalidVertexID => write!(f, "vertex ID was invalid"),
-            DependencyIndexOutOfBounds => write!(f, "dependency vertex index was out of bounds"),
+            InvalidVertexID => "invalid vertex ID".fmt(f),
+            DependencyIndexOutOfBounds => "dependency vertex index out of bounds".fmt(f),
         }
     }
 }

@@ -1,13 +1,9 @@
-use std::collections::{HashMap, HashSet, hash_set};
-use std::fmt::{Display, Formatter};
-use std::hash::Hash;
-use std::iter::Iterator;
-use std::error::Error;
-
-use super::task_graph::TaskGraph;
-
-use minihandle::IndexManager;
-use num_traits::{PrimInt, Unsigned};
+use {
+    std::{collections::{HashMap, HashSet, hash_set}, fmt::{Display, Formatter}, hash::Hash, iter::Iterator, error::Error},
+    super::task_graph::TaskGraph,
+    minihandle::IndexManager,
+    num_traits::{PrimInt, Unsigned}
+};
 
 /// Graph vertex ID trait - primitive unsigned integer.
 pub trait VertexID: PrimInt + Unsigned + Hash {}
@@ -16,18 +12,6 @@ impl<T: PrimInt + Unsigned + Hash> VertexID for T {}
 
 type Vertices<VID, T> = HashMap<VID, T>;
 type Edges<VID> = HashMap<VID, HashSet<VID>>;
-
-fn num_neighbors_impl<VID: VertexID>(edges: &Edges<VID>, vertex_id: VID) -> usize {
-    edges.get(&vertex_id).map_or(0, HashSet::<VID>::len)
-}
-
-fn neighbors_impl<VID: VertexID>(edges: &Edges<VID>, vertex_id: VID) -> VertexIDIterator<'_, VID> {
-    VertexIDIterator::new(
-        edges
-            .get(&vertex_id)
-            .map_or(None, |edges| Some(edges.iter())),
-    )
-}
 
 /// Represents a digraph.
 ///
@@ -49,21 +33,22 @@ pub struct Graph<VID: VertexID, T> {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AccessVertexError {
-    /// The vertex ID was invalid.
+    /// Invalid vertex ID.
     InvalidVertexID,
 }
+
+impl Error for AccessVertexError {}
 
 impl Display for AccessVertexError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         use AccessVertexError::*;
 
         match self {
-            InvalidVertexID => write!(f, "vertex ID was invalid"),
+            InvalidVertexID => "invalid vertex ID".fmt(f),
         }
     }
 }
 
-impl Error for AccessVertexError {}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AddEdgeStatus {
@@ -78,14 +63,8 @@ impl Display for AddEdgeStatus {
         use AddEdgeStatus::*;
 
         match self {
-            Added => write!(
-                f,
-                "a new directed edge was added to the graph between the two vertices"
-            ),
-            AlreadyExists => write!(
-                f,
-                "a directed edge between the two vertices already exists"
-            ),
+            Added => "a new directed edge was added to the graph between the two vertices".fmt(f),
+            AlreadyExists => "a directed edge between the two vertices already exists".fmt(f),
         }
     }
 }
@@ -103,14 +82,8 @@ impl Display for RemoveEdgeStatus {
         use RemoveEdgeStatus::*;
 
         match self {
-            Removed => write!(
-                f,
-                "a previously existing directed edge between the two vertices was removed"
-            ),
-            DoesNotExist => write!(
-                f,
-                "a directed edge between the two vertices does not exist"
-            ),
+            Removed => "a previously existing directed edge between the two vertices was removed".fmt(f),
+            DoesNotExist => "a directed edge between the two vertices does not exist".fmt(f),
         }
     }
 }
@@ -132,9 +105,9 @@ impl Display for AccessEdgeError {
         use AccessEdgeError::*;
 
         match self {
-            InvalidFromVertex => write!(f, "`from` vertex ID was invalid"),
-            InvalidToVertex => write!(f, "`to` vertex ID was invalid"),
-            LoopEdge => write!(f, "loop edge (`from` and `to` vertices are the same)"),
+            InvalidFromVertex => "`from` vertex ID was invalid".fmt(f),
+            InvalidToVertex => "`to` vertex ID was invalid".fmt(f),
+            LoopEdge => "loop edge (`from` and `to` vertices are the same)".fmt(f),
         }
     }
 }
@@ -160,7 +133,7 @@ impl<VID: VertexID, T> Graph<VID, T> {
         let vertex_id = self.vertex_ids.create();
 
         let prev = self.vertices.insert(vertex_id, vertex);
-        assert!(prev.is_none(), "Duplicate vertex ID in the graph.");
+        debug_assert!(prev.is_none(), "duplicate vertex ID in the graph");
 
         self.roots.insert(vertex_id);
         self.leaves.insert(vertex_id);
@@ -573,8 +546,20 @@ impl<'a, VID: VertexID> Iterator for VertexIDIterator<'a, VID> {
     }
 }
 
+fn num_neighbors_impl<VID: VertexID>(edges: &Edges<VID>, vertex_id: VID) -> usize {
+    edges.get(&vertex_id).map_or(0, HashSet::<VID>::len)
+}
+
+fn neighbors_impl<VID: VertexID>(edges: &Edges<VID>, vertex_id: VID) -> VertexIDIterator<'_, VID> {
+    VertexIDIterator::new(
+        edges
+            .get(&vertex_id)
+            .map_or(None, |edges| Some(edges.iter())),
+    )
+}
+
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]
