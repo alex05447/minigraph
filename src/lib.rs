@@ -1,8 +1,10 @@
+mod error;
 mod graph;
+mod smallset;
 mod task_graph;
 
-pub use graph::{
-    AccessEdgeError, AccessVertexError, AddEdgeStatus, Graph, RemoveEdgeStatus, VertexID,
-};
+pub use error::*;
+pub use graph::*;
+pub use task_graph::*;
 
-pub use task_graph::{TaskGraph, TaskVertex};
+pub(crate) use smallset::*;

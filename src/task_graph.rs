@@ -1,47 +1,255 @@
 use {
-    std::{collections::{HashMap, HashSet}, sync::atomic::{AtomicUsize, Ordering}, error::Error, fmt::{Display, Formatter}, iter::{Iterator, ExactSizeIterator}},
-    super::graph::{AccessVertexError, Graph, VertexID}
+    crate::*,
+    minihandle::*,
+    smallvec::SmallVec,
+    std::{
+        iter::{ExactSizeIterator, Iterator},
+        sync::atomic::{AtomicUsize, Ordering},
+    },
 };
 
-/// Task graph vertex payload wrapper which tracks the vertice's dependency completion
-/// during task graph (parallel) execution.
-pub struct TaskVertex<T> {
-    /// Vertex payload.
-    vertex: T,
-    /// Constant number of dependencies (inbound edges).
-    num_dependencies: usize,
-    /// Current number of completed dependencies (inbound edges).
-    completed_dependencies: AtomicUsize,
+/// A [`TaskVertex`] which had all its dependencies [`completed`](TaskVertex::ready)
+/// and may be now used to [`access`](ReadyTaskVertex::get_dependent) the dependent vertices.
+pub struct ReadyTaskVertex<'a, VID: VertexID, T> {
+    vertices: &'a [TaskVertexInner<VID, T>],
+    index: usize,
 }
 
-impl<T> TaskVertex<T> {
-    /// Accesses the vertex payload.
+impl<'a, VID: VertexID, T> ReadyTaskVertex<'a, VID, T> {
+    /// Accesses the task vertex payload.
     pub fn vertex(&self) -> &T {
-        &self.vertex
+        &self.inner().vertex
     }
 
-    /// Accesses the vertex payload.
-    pub fn vertex_mut(&mut self) -> &mut T {
-        &mut self.vertex
+    /// Returns the number of [`vertices`](TaskVertex) dependant on this vertex.
+    pub fn num_dependents(&self) -> usize {
+        self.inner().dependents.len()
     }
 
-    /// Increments the completed dependency counter.
-    /// Returns `true` if all dependencies are now satisfied.
-    pub fn is_ready(&self) -> bool {
-        self.complete_dependency() >= self.num_dependencies
+    /// If dependent vertex `index` is valid (i.e. in range `0` .. [`num_dependents`](ReadyTaskVertex::num_dependents)),
+    /// returns the dependent [`TaskVertex`] at this `index`.
+    pub fn get_dependent(&self, index: usize) -> Option<TaskVertex<'a, VID, T>> {
+        Some(TaskVertex {
+            vertices: self.vertices,
+            index: <VID as ToUsize>::to_usize(*self.inner().dependents.get(index)?),
+        })
     }
 
-    /// Returns the incremented counter value.
-    fn complete_dependency(&self) -> usize {
-        self.completed_dependencies.fetch_add(1, Ordering::SeqCst) + 1
+    /// Returns the dependent [`TaskVertex`] at `index`.
+    ///
+    /// # Safety
+    ///
+    /// The caller guarantees the dependent vertex `index` is valid (i.e. in range `0` .. [`num_dependents`](ReadyTaskVertex::num_dependents)).
+    pub unsafe fn get_dependent_unchecked(&self, index: usize) -> TaskVertex<'a, VID, T> {
+        debug_assert!(index < self.inner().dependents.len());
+        TaskVertex {
+            vertices: self.vertices,
+            index: <VID as ToUsize>::to_usize(*self.inner().dependents.get_unchecked(index)),
+        }
     }
 
-    fn new(vertex: T, num_dependencies: usize) -> Self {
+    /// Returns an iterator over all dependent [`vertices`](TaskVertex) dependent on this [`ReadyTaskVertex`] in unspecified order.
+    pub fn dependents(&self) -> impl ExactSizeIterator<Item = TaskVertex<'_, VID, T>> {
+        let inner = self.inner();
+        (0..inner.dependents.len()).map(move |index| TaskVertex {
+            vertices: self.vertices,
+            index,
+        })
+    }
+
+    fn inner(&self) -> &TaskVertexInner<VID, T> {
+        // Must succeed - all vertex indices are valid.
+        debug_assert!(self.index < self.vertices.len(), "invalid vertex index");
+        unsafe { self.vertices.get_unchecked(self.index) }
+    }
+}
+
+/// Task graph vertex payload wrapper which tracks the vertex's dependency completion
+/// during [`TaskGraph`] (parallel) execution.
+pub struct TaskVertex<'a, VID: VertexID, T> {
+    vertices: &'a [TaskVertexInner<VID, T>],
+    index: usize,
+}
+
+impl<'a, VID: VertexID, T> TaskVertex<'a, VID, T> {
+    /// Increments the completed dependency counter
+    /// and returns `Ok` if all dependencies are now satisfied,
+    /// or `Err` if at least one dependency is still incomplete.
+    ///
+    /// On success the returned [`ReadyTaskVertex`] may be used to access the dependent vertices.
+    pub fn ready(self) -> Result<ReadyTaskVertex<'a, VID, T>, Self> {
+        let vertex = self.inner();
+        (vertex.complete_dependency() >= vertex.num_dependencies)
+            .then(|| ReadyTaskVertex {
+                vertices: self.vertices,
+                index: self.index,
+            })
+            .ok_or(self)
+    }
+
+    fn inner(&self) -> &TaskVertexInner<VID, T> {
+        // Must succeed - all vertex indices are valid.
+        debug_assert!(self.index < self.vertices.len(), "invalid vertex index");
+        unsafe { self.vertices.get_unchecked(self.index) }
+    }
+}
+
+/*
+/// A [`TaskVertexMut`] which had all its dependencies [`completed`](TaskVertexMut::ready)
+/// and may be now used to [`access`](ReadyTaskVertexMut::get_dependent) the dependent vertices.
+pub struct ReadyTaskVertexMut<'a, VID: VertexID, T> {
+    vertices: &'a mut [TaskVertexInner<VID, T>],
+    index: usize,
+}
+
+impl<'a, VID: VertexID, T> ReadyTaskVertexMut<'a, VID, T> {
+    /// Accesses the task vertex payload.
+    pub fn vertex(&self) -> &T {
+        &self.inner().vertex
+    }
+
+    /// Accesses the task vertex payload.
+    pub fn vertex_mut(&'a mut self) -> &'a mut T {
+        &mut self.inner_mut().vertex
+    }
+
+    /// Returns the number of [`vertices`](TaskVertexMut) dependant on this vertex.
+    pub fn num_dependents(&self) -> usize {
+        self.inner().dependents.len()
+    }
+
+    /// If dependent vertex `index` is valid (i.e. in range `0` .. [`num_dependents`](TaskVertexMut::num_dependents)),
+    /// returns the dependent [`TaskVertex`] at this `index`.
+    pub fn get_dependent(&'a self, index: usize) -> Option<TaskVertex<'a, VID, T>> {
+        Some(TaskVertex {
+            vertices: self.vertices,
+            index: <VID as ToUsize>::to_usize(*self.inner().dependents.get(index)?),
+        })
+    }
+
+    /// Returns the dependent [`TaskVertex`] at `index`.
+    ///
+    /// # Safety
+    ///
+    /// The caller guarantees the dependent vertex `index` is valid (i.e. in range `0` .. [`num_dependents`](TaskVertexMut::num_dependents)).
+    pub unsafe fn get_dependent_unchecked(&'a self, index: usize) -> TaskVertex<'a, VID, T> {
+        debug_assert!(index < self.inner().dependents.len());
+        TaskVertex {
+            vertices: self.vertices,
+            index: <VID as ToUsize>::to_usize(*self.inner().dependents.get_unchecked(index)),
+        }
+    }
+
+    /// If dependent vertex `index` is valid (i.e. in range `0` .. [`num_dependents`](TaskVertexMut::num_dependents)),
+    /// returns the (mutable) dependent [`TaskVertexMut`] at this `index`.
+    pub fn get_dependent_mut(&'a mut self, index: usize) -> Option<TaskVertexMut<'a, VID, T>> {
+        let index = <VID as ToUsize>::to_usize(*self.inner().dependents.get(index)?);
+        Some(TaskVertexMut {
+            vertices: self.vertices,
+            index,
+        })
+    }
+
+    /// Returns the (mutable) dependent [`TaskVertexMut`] at `index`.
+    ///
+    /// # Safety
+    ///
+    /// The caller guarantees the dependent vertex `index` is valid (i.e. in range `0` .. [`num_dependents`](TaskVertexMut::num_dependents)).
+    pub unsafe fn get_dependent_unchecked_mut(
+        &'a mut self,
+        index: usize,
+    ) -> TaskVertexMut<'a, VID, T> {
+        debug_assert!(index < self.inner().dependents.len());
+        let index = <VID as ToUsize>::to_usize(*self.inner().dependents.get_unchecked(index));
+        TaskVertexMut {
+            vertices: self.vertices,
+            index,
+        }
+    }
+
+    /// Returns an iterator over all dependent [`vertices`](TaskVertex) dependent on this [`TaskVertex`] in unspecified order.
+    pub fn dependents(&self) -> impl ExactSizeIterator<Item = TaskVertex<'_, VID, T>> {
+        let inner = self.inner();
+        (0..inner.dependents.len()).map(move |index| TaskVertex {
+            vertices: self.vertices,
+            index,
+        })
+    }
+
+    fn inner(&self) -> &TaskVertexInner<VID, T> {
+        // Must succeed - all vertex indices are valid.
+        debug_assert!(self.index < self.vertices.len(), "invalid vertex index");
+        unsafe { self.vertices.get_unchecked(self.index) }
+    }
+
+    fn inner_mut(&mut self) -> &mut TaskVertexInner<VID, T> {
+        // Must succeed - all vertex indices are valid.
+        debug_assert!(self.index < self.vertices.len(), "invalid vertex index");
+        unsafe { self.vertices.get_unchecked_mut(self.index) }
+    }
+}
+
+/// Task graph vertex (mutable) payload wrapper which tracks the vertex's dependency completion
+/// during [`TaskGraph`] (parallel) execution.
+pub struct TaskVertexMut<'a, VID: VertexID, T> {
+    vertices: &'a mut [TaskVertexInner<VID, T>],
+    index: usize,
+}
+
+impl<'a, VID: VertexID, T> TaskVertexMut<'a, VID, T> {
+    /// Increments the completed dependency counter
+    /// and returns `Ok` if all dependencies are now satisfied,
+    /// or `Err` if at least one dependency is still incomplete.
+    ///
+    /// On success the returned [`ReadyTaskVertex`] may be used to access the dependent vertices.
+    pub fn ready(self) -> Result<ReadyTaskVertexMut<'a, VID, T>, Self> {
+        let vertex = self.inner();
+        if vertex.complete_dependency() >= vertex.num_dependencies {
+            Ok(ReadyTaskVertexMut {
+                vertices: self.vertices,
+                index: self.index,
+            })
+        } else {
+            Err(self)
+        }
+    }
+
+    fn inner(&self) -> &TaskVertexInner<VID, T> {
+        // Must succeed - all vertex indices are valid.
+        debug_assert!(self.index < self.vertices.len(), "invalid vertex index");
+        unsafe { self.vertices.get_unchecked(self.index) }
+    }
+}
+*/
+
+pub(crate) struct TaskVertexInner<VID: VertexID, T> {
+    /// Vertex payload.
+    vertex: T,
+    /// Constant number of dependencies of this vertex (inbound edges).
+    num_dependencies: usize,
+    /// Current number of completed dependencies of this vertex (inbound edges).
+    completed_dependencies: AtomicUsize,
+    /// Indices of all vertices dependent on this vertex (outbound edges) in the task graph `vertices` array.
+    dependents: SmallVec<[VID; NUM_EDGES]>,
+}
+
+impl<VID: VertexID, T> TaskVertexInner<VID, T> {
+    pub(crate) fn new(
+        vertex: T,
+        num_dependencies: usize,
+        dependents: SmallVec<[VID; NUM_EDGES]>,
+    ) -> Self {
         Self {
             vertex,
             num_dependencies,
             completed_dependencies: AtomicUsize::new(0),
+            dependents,
         }
+    }
+
+    /// Increments the completed dependency counter, returns the incremented counter value.
+    fn complete_dependency(&self) -> usize {
+        self.completed_dependencies.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     fn reset(&self) {
@@ -49,257 +257,152 @@ impl<T> TaskVertex<T> {
     }
 }
 
-/// Simplified unidirectional representation of the (acyclic) [`Graph`]
-/// used as the dependency/execution graph for task scheduling / (parallel) execution.
+/// Simplified immutable unidirectional representation of the (acyclic) [`Graph`]
+/// used as the dependency (or more precisely, execution) graph for task scheduling / (parallel) execution.
 ///
-/// Edges represent vertex dependencies, directions correspond to vertex execution order.
+/// Edges represent vertex dependencies, and directions correspond to vertex execution order.
 ///
-/// [`Graph`]: struct.Graph.html
+/// Example use:
+///
+/// ```
+/// # use minigraph::*;
+///
+/// fn process_vertex<VID: VertexID, T>(v: TaskVertex<'_, VID, T>) {
+///     // Increments the dependency counter, returns `Err` if not ready.
+///     if let Ok(v) = v.ready() {
+///         // All dependencies are complete, we may proceed.
+///
+///         let payload = v.vertex();
+///         // ... do something with the payload ...
+///
+///         // Process all dependants recursively.
+///         for v in v.dependents() {
+///             process_vertex(v);
+///         }
+///     }
+/// }
+///
+/// fn process_graph<VID: VertexID, T>(graph: &mut TaskGraph<VID, T>) {
+///     // Start processing the graph with the root vertices;
+///     // process each dependent vertex only after all its dependencies have been satisfied.
+///     for root in graph.roots() {
+///         process_vertex(root);
+///     }
+///
+///     // Reset all dependency counters; the graph may be executed again.
+///     graph.reset();
+/// }
+/// ```
 pub struct TaskGraph<VID: VertexID, T> {
-    vertices: HashMap<VID, TaskVertex<T>>,
+    /// Indices of vertices in `vertices` array with no dependencies.
     roots: Vec<VID>,
-    out_edges: HashMap<VID, Vec<VID>>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum GetRootError {
-    /// Root vertex index out of bounds.
-    RootIndexOutOfBounds,
-}
-
-impl Error for GetRootError {}
-
-impl Display for GetRootError {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        use GetRootError::*;
-
-        match self {
-            RootIndexOutOfBounds => "root vertex index out of bounds".fmt(f),
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum GetDependencyError {
-    /// Invalid vertex ID.
-    InvalidVertexID,
-    /// Dependency vertex index out of bounds.
-    DependencyIndexOutOfBounds,
-}
-
-impl Error for GetDependencyError {}
-
-impl Display for GetDependencyError {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        use GetDependencyError::*;
-
-        match self {
-            InvalidVertexID => "invalid vertex ID".fmt(f),
-            DependencyIndexOutOfBounds => "dependency vertex index out of bounds".fmt(f),
-        }
-    }
+    vertices: Vec<TaskVertexInner<VID, T>>,
 }
 
 impl<VID: VertexID, T> TaskGraph<VID, T> {
-    /// Reset the completed dependency counters on all vertices,
-    /// allowing the graph to be executed again.
+    /// Resets the completed dependency counters on all [`vertices`](TaskVertex),
+    /// allowing the [`TaskGraph`] to be executed again.
     pub fn reset(&self) {
-        for (_, vertex) in self.vertices.iter() {
-            vertex.reset()
-        }
+        self.vertices.iter().for_each(TaskVertexInner::reset);
     }
 
-    /// Returns the current number of root vertices (with no inbound edges) in the graph.
+    /// Returns the current number of root [`vertices`](TaskVertex) (i.e. ones with no dependencies / inbound edges) in the [`TaskGraph`].
     pub fn num_roots(&self) -> usize {
         self.roots.len()
     }
 
-    /// If `root_index` is in range `0 .. num_roots()`, returns the root [`TaskVertex`] at `root_index`.
-    ///
-    /// [`TaskVertex`]: struct.TaskVertex.html
-    pub fn get_root(&self, root_index: usize) -> Result<(&VID, &TaskVertex<T>), GetRootError> {
-        let vertex_id = self
-            .roots
-            .get(root_index)
-            .ok_or(GetRootError::RootIndexOutOfBounds)?;
-        Ok((
-            vertex_id,
-            self.vertices
-                .get(&vertex_id)
-                .expect("Invalid root vertex ID."),
-        ))
+    /// If root vertex `index` is valid (i.e. in range [`0` .. [`num_roots`](TaskGraph::num_roots)]),
+    /// returns the root (i.e. ones with no dependencies / inbound edges) [`TaskVertex`] at `index`.
+    pub fn root(&self, index: usize) -> Option<TaskVertex<'_, VID, T>> {
+        let vertex_index = <VID as ToUsize>::to_usize(*self.roots.get(index)?);
+        // Must succeed - all root vertex indices are valid.
+        debug_assert!(
+            vertex_index < self.vertices.len(),
+            "invalid root vertex index"
+        );
+        Some(TaskVertex {
+            vertices: &self.vertices,
+            index: vertex_index,
+        })
     }
 
-    /// If `root_index` is in range `0 .. num_roots()`, returns the root [`TaskVertex`] at `root_index`.
+    /// Returns the root (i.e. ones with no dependencies / inbound edges) [`TaskVertex`] at `index`.
     ///
-    /// Otherwise panics.
+    /// # Safety
     ///
-    /// [`TaskVertex`]: struct.TaskVertex.html
-    pub unsafe fn get_root_unchecked(&self, root_index: usize) -> (&VID, &TaskVertex<T>) {
-        let vertex_id = self.roots.get_unchecked(root_index);
-        (
-            vertex_id,
-            self.vertices
-                .get(&vertex_id)
-                .expect("Invalid root vertex ID."),
-        )
-    }
-
-    /// Returns an iterator over all task graph roots (vertices with no dependencies).
-    pub fn roots(&self) -> impl Iterator<Item = (&'_ VID, &'_ TaskVertex<T>)> {
-        TaskVertexIterator::new(&self.vertices, Some(self.roots.iter()))
-    }
-
-    /// If `vertex_id` is valid, returns the number of vertices dependant on it.
-    pub fn num_dependencies(&self, vertex_id: VID) -> Result<usize, AccessVertexError> {
-        if !self.vertices.contains_key(&vertex_id) {
-            Err(AccessVertexError::InvalidVertexID)
-        } else {
-            Ok(self
-                .out_edges
-                .get(&vertex_id)
-                .map_or(0, |out_edges| out_edges.len()))
+    /// The caller guarantees the root vertex `index` is valid (i.e. in range [`0` .. [`num_roots`](TaskGraph::num_roots)]).
+    pub unsafe fn root_unchecked(&self, index: usize) -> TaskVertex<'_, VID, T> {
+        let vertex_index = <VID as ToUsize>::to_usize(*self.roots.get_unchecked(index));
+        // Must succeed - all root vertex indices are valid.
+        debug_assert!(
+            vertex_index < self.vertices.len(),
+            "invalid root vertex index"
+        );
+        TaskVertex {
+            vertices: &self.vertices,
+            index: vertex_index,
         }
     }
 
-    /// If `vertex_id` is valid and `dependency_index` is in range `0 .. num_dependencies(vertex_id)`,
-    /// returns the dependency [`TaskVertex`] at `dependency_index`.
-    ///
-    /// [`TaskVertex`]: struct.TaskVertex.html
-    pub fn get_dependency(
-        &self,
-        vertex_id: VID,
-        dependency_index: usize,
-    ) -> Result<(&VID, &TaskVertex<T>), GetDependencyError> {
-        if !self.vertices.contains_key(&vertex_id) {
-            Err(GetDependencyError::InvalidVertexID)
-        } else {
-            let dependencies = self
-                .out_edges
-                .get(&vertex_id)
-                .ok_or(GetDependencyError::DependencyIndexOutOfBounds)?;
-            let dependency_vertex_id = dependencies
-                .get(dependency_index)
-                .ok_or(GetDependencyError::DependencyIndexOutOfBounds)?;
-            Ok((
-                dependency_vertex_id,
-                self.vertices
-                    .get(&dependency_vertex_id)
-                    .expect("Invalid dependency vertex ID."),
-            ))
-        }
+    /*
+    /// If root vertex `index` is valid (i.e. in range [`0` .. [`num_roots`](TaskGraph::num_roots)]),
+    /// returns the root (i.e. ones with no dependencies / inbound edges) [`TaskVertexMut`] at `index`.
+    pub fn root_mut(&mut self, index: usize) -> Option<TaskVertexMut<'_, VID, T>> {
+        let vertex_index = <VID as ToUsize>::to_usize(*self.roots.get(index)?);
+        // Must succeed - all root vertex indices are valid.
+        debug_assert!(
+            vertex_index < self.vertices.len(),
+            "invalid root vertex index"
+        );
+        Some(TaskVertexMut {
+            vertices: &mut self.vertices,
+            index: vertex_index,
+        })
     }
 
-    /// If `vertex_id` is valid and `dependency_index` is in range `0 .. num_dependencies(vertex_id)`,
-    /// returns the dependency [`TaskVertex`] at `dependency_index`.
+    /// Returns the root (i.e. ones with no dependencies / inbound edges) [`TaskVertexMut`] at `index`.
     ///
-    /// Otherwise panics.
+    /// # Safety
     ///
-    /// [`TaskVertex`]: struct.TaskVertex.html
-    pub unsafe fn get_dependency_unchecked(
-        &self,
-        vertex_id: VID,
-        dependency_index: usize,
-    ) -> (&VID, &TaskVertex<T>) {
-        let dependencies = self.out_edges.get(&vertex_id).expect("Invalid vertex ID.");
-        let dependency_vertex_id = dependencies.get_unchecked(dependency_index);
-        (
-            dependency_vertex_id,
-            self.vertices
-                .get(&dependency_vertex_id)
-                .expect("Invalid dependency vertex ID."),
-        )
-    }
-
-    /// If `vertex_id` is valid, returns an iterator over all vertices dependant on it.
-    pub fn dependencies(
-        &self,
-        vertex_id: VID,
-    ) -> Result<impl Iterator<Item = (&'_ VID, &'_ TaskVertex<T>)>, AccessVertexError> {
-        if !self.vertices.contains_key(&vertex_id) {
-            Err(AccessVertexError::InvalidVertexID)
-        } else {
-            Ok(TaskVertexIterator::new(
-                &self.vertices,
-                self.out_edges
-                    .get(&vertex_id)
-                    .map_or(None, |out_edges| Some(out_edges.iter())),
-            ))
+    /// The caller guarantees the root vertex `index` is valid (i.e. in range [`0` .. [`num_roots`](TaskGraph::num_roots)]).
+    pub unsafe fn root_unchecked_mut(&mut self, index: usize) -> TaskVertexMut<'_, VID, T> {
+        let vertex_index = <VID as ToUsize>::to_usize(*self.roots.get_unchecked(index));
+        // Must succeed - all root vertex indices are valid.
+        debug_assert!(
+            vertex_index < self.vertices.len(),
+            "invalid root vertex index"
+        );
+        TaskVertexMut {
+            vertices: &mut self.vertices,
+            index: vertex_index,
         }
+    }
+    */
+
+    /// Returns an iterator over all root (i.e. ones with no dependencies / inbound edges) [`vertices`](TaskVertex) in the [`TaskGraph`] in unspecified order.
+    pub fn roots(&self) -> impl ExactSizeIterator<Item = TaskVertex<'_, VID, T>> {
+        (0..self.vertices.len()).map(move |index| TaskVertex {
+            vertices: &self.vertices,
+            index,
+        })
     }
 }
 
 impl<VID: VertexID, T: Clone> TaskGraph<VID, T> {
-    pub(super) fn new(
-        graph: &Graph<VID, T>,
-        out_edges: &HashMap<VID, HashSet<VID>>,
-    ) -> Self {
-        let vertices = graph.vertices()
-            .map(|(vertex_id, vertex)| {
-                (
-                    *vertex_id,
-                    TaskVertex::new(vertex.clone(), graph.num_in_neighbors(*vertex_id).unwrap()),
-                )
-            })
-            .collect();
-
-        let roots = graph.roots().map(|vertex_id| *vertex_id).collect();
-
-        let out_edges = out_edges
+    pub(crate) fn new(vertices: Vec<TaskVertexInner<VID, T>>, roots: Vec<VID>) -> Self {
+        // Sanity check - make sure all root indices are in bounds.
+        debug_assert!(
+            roots
+                .iter()
+                .all(|&root| <VID as ToUsize>::to_usize(root) < vertices.len()),
+            "invalid root index"
+        );
+        // Sanity check - make sure all dependent indices are in bounds.
+        debug_assert!(vertices
             .iter()
-            .map(|(vertex_id, vertex_ids)| {
-                (
-                    *vertex_id,
-                    vertex_ids.iter().map(|vertex_id| *vertex_id).collect(),
-                )
-            })
-            .collect();
+            .flat_map(|vertex| vertex.dependents.iter())
+            .all(|&index| <VID as ToUsize>::to_usize(index) < vertices.len()));
 
-        Self {
-            vertices,
-            roots,
-            out_edges,
-        }
-    }
-}
-
-/// Iterates over [`TaskVertex`]'s, returning their vertex ID and payload.
-///
-/// [`TaskVertex`]: struct.TaskVertex.html
-struct TaskVertexIterator<'a, VID: VertexID, T> {
-    vertices: &'a HashMap<VID, TaskVertex<T>>,
-    vertex_ids: Option<std::slice::Iter<'a, VID>>,
-}
-
-impl<'a, VID: VertexID, T> TaskVertexIterator<'a, VID, T> {
-    fn new(
-        vertices: &'a HashMap<VID, TaskVertex<T>>,
-        vertex_ids: Option<std::slice::Iter<'a, VID>>,
-    ) -> Self {
-        Self {
-            vertices,
-            vertex_ids,
-        }
-    }
-}
-
-impl<'a, VID: VertexID, T> Iterator for TaskVertexIterator<'a, VID, T> {
-    type Item = (&'a VID, &'a TaskVertex<T>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.vertex_ids
-            .as_mut()
-            .map(|vertex_ids| vertex_ids.next())
-            .map_or(None, |vertex_id| {
-                vertex_id.map(|vertex_id| (vertex_id, self.vertices.get(vertex_id).unwrap()))
-            })
-    }
-}
-
-impl<'a, VID: VertexID, T> ExactSizeIterator for TaskVertexIterator<'a, VID, T> {
-    fn len(&self) -> usize {
-        self.vertex_ids
-            .as_ref()
-            .map_or(0, |vertex_ids| vertex_ids.len())
+        Self { vertices, roots }
     }
 }
