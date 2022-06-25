@@ -1,6 +1,7 @@
 use {
     crate::*,
     minihandle::*,
+    miniunchecked::*,
     smallvec::SmallVec,
     std::{
         iter::{ExactSizeIterator, Iterator},
@@ -41,10 +42,9 @@ impl<'a, VID: VertexID, T> ReadyTaskVertex<'a, VID, T> {
     ///
     /// The caller guarantees the dependent vertex `index` is valid (i.e. in range `0` .. [`num_dependents`](ReadyTaskVertex::num_dependents)).
     pub unsafe fn get_dependent_unchecked(&self, index: usize) -> TaskVertex<'a, VID, T> {
-        debug_assert!(index < self.inner().dependents.len());
         TaskVertex {
             vertices: self.vertices,
-            index: <VID as ToUsize>::to_usize(*self.inner().dependents.get_unchecked(index)),
+            index: <VID as ToUsize>::to_usize(*self.inner().dependents.get_unchecked_dbg(index)),
         }
     }
 
@@ -59,8 +59,10 @@ impl<'a, VID: VertexID, T> ReadyTaskVertex<'a, VID, T> {
 
     fn inner(&self) -> &TaskVertexInner<VID, T> {
         // Must succeed - all vertex indices are valid.
-        debug_assert!(self.index < self.vertices.len(), "invalid vertex index");
-        unsafe { self.vertices.get_unchecked(self.index) }
+        unsafe {
+            self.vertices
+                .get_unchecked_dbg_msg(self.index, "invalid vertex index")
+        }
     }
 }
 
@@ -89,8 +91,10 @@ impl<'a, VID: VertexID, T> TaskVertex<'a, VID, T> {
 
     fn inner(&self) -> &TaskVertexInner<VID, T> {
         // Must succeed - all vertex indices are valid.
-        debug_assert!(self.index < self.vertices.len(), "invalid vertex index");
-        unsafe { self.vertices.get_unchecked(self.index) }
+        unsafe {
+            self.vertices
+                .get_unchecked_dbg_msg(self.index, "invalid vertex index")
+        }
     }
 }
 
@@ -133,10 +137,9 @@ impl<'a, VID: VertexID, T> ReadyTaskVertexMut<'a, VID, T> {
     ///
     /// The caller guarantees the dependent vertex `index` is valid (i.e. in range `0` .. [`num_dependents`](TaskVertexMut::num_dependents)).
     pub unsafe fn get_dependent_unchecked(&'a self, index: usize) -> TaskVertex<'a, VID, T> {
-        debug_assert!(index < self.inner().dependents.len());
         TaskVertex {
             vertices: self.vertices,
-            index: <VID as ToUsize>::to_usize(*self.inner().dependents.get_unchecked(index)),
+            index: <VID as ToUsize>::to_usize(*self.inner().dependents.get_unchecked_dbg(index)),
         }
     }
 
@@ -159,8 +162,7 @@ impl<'a, VID: VertexID, T> ReadyTaskVertexMut<'a, VID, T> {
         &'a mut self,
         index: usize,
     ) -> TaskVertexMut<'a, VID, T> {
-        debug_assert!(index < self.inner().dependents.len());
-        let index = <VID as ToUsize>::to_usize(*self.inner().dependents.get_unchecked(index));
+        let index = <VID as ToUsize>::to_usize(*self.inner().dependents.get_unchecked_dbg(index));
         TaskVertexMut {
             vertices: self.vertices,
             index,
@@ -178,14 +180,12 @@ impl<'a, VID: VertexID, T> ReadyTaskVertexMut<'a, VID, T> {
 
     fn inner(&self) -> &TaskVertexInner<VID, T> {
         // Must succeed - all vertex indices are valid.
-        debug_assert!(self.index < self.vertices.len(), "invalid vertex index");
-        unsafe { self.vertices.get_unchecked(self.index) }
+        unsafe { self.vertices.get_unchecked_dbg_msg(self.index, "invalid vertex index") }
     }
 
     fn inner_mut(&mut self) -> &mut TaskVertexInner<VID, T> {
         // Must succeed - all vertex indices are valid.
-        debug_assert!(self.index < self.vertices.len(), "invalid vertex index");
-        unsafe { self.vertices.get_unchecked_mut(self.index) }
+        unsafe { self.vertices.get_unchecked_mut_dbg_msg(self.index, "invalid vertex index") }
     }
 }
 
@@ -216,8 +216,7 @@ impl<'a, VID: VertexID, T> TaskVertexMut<'a, VID, T> {
 
     fn inner(&self) -> &TaskVertexInner<VID, T> {
         // Must succeed - all vertex indices are valid.
-        debug_assert!(self.index < self.vertices.len(), "invalid vertex index");
-        unsafe { self.vertices.get_unchecked(self.index) }
+        unsafe { self.vertices.get_unchecked_dbg_msg(self.index, "invalid vertex index") }
     }
 }
 */
@@ -332,7 +331,7 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
     ///
     /// The caller guarantees the root vertex `index` is valid (i.e. in range [`0` .. [`num_roots`](TaskGraph::num_roots)]).
     pub unsafe fn root_unchecked(&self, index: usize) -> TaskVertex<'_, VID, T> {
-        let vertex_index = <VID as ToUsize>::to_usize(*self.roots.get_unchecked(index));
+        let vertex_index = <VID as ToUsize>::to_usize(*self.roots.get_unchecked_dbg(index));
         // Must succeed - all root vertex indices are valid.
         debug_assert!(
             vertex_index < self.vertices.len(),
@@ -366,7 +365,7 @@ impl<VID: VertexID, T> TaskGraph<VID, T> {
     ///
     /// The caller guarantees the root vertex `index` is valid (i.e. in range [`0` .. [`num_roots`](TaskGraph::num_roots)]).
     pub unsafe fn root_unchecked_mut(&mut self, index: usize) -> TaskVertexMut<'_, VID, T> {
-        let vertex_index = <VID as ToUsize>::to_usize(*self.roots.get_unchecked(index));
+        let vertex_index = <VID as ToUsize>::to_usize(*self.roots.get_unchecked_dbg(index));
         // Must succeed - all root vertex indices are valid.
         debug_assert!(
             vertex_index < self.vertices.len(),
